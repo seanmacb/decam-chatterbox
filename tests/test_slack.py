@@ -37,6 +37,35 @@ def test_channel_for_falls_back_to_main_when_no_test_channel(config):
     assert poster.channel_for(is_test=True) == "#main"
 
 
+def test_explicit_channel_overrides_channel_for(config):
+    config.slack.channel = "#main"
+    config.slack.test_channel = "#test"
+    poster = SlackPoster(config)
+    posted = poster.post([], "hi", is_test=False, channel="#urgent", label="override")
+    assert posted.channel == "#urgent"
+
+
+def test_mention_only_included_when_requested(config):
+    config.slack.mention = ["!subteam^S123"]
+    poster = SlackPoster(config)
+
+    poster.post([], "hello", label="no_mention")
+    payload_no_mention = json.loads((poster.output_dir / "no_mention.json").read_text())
+    assert "!subteam^S123" not in payload_no_mention["text"]
+
+    poster.post([], "hello", mention=True, label="with_mention")
+    payload_with_mention = json.loads((poster.output_dir / "with_mention.json").read_text())
+    assert "!subteam^S123" in payload_with_mention["text"]
+
+
+def test_mention_omitted_when_none_configured(config):
+    config.slack.mention = []
+    poster = SlackPoster(config)
+    poster.post([], "hello", mention=True, label="mytest")
+    payload = json.loads((poster.output_dir / "mytest.json").read_text())
+    assert payload["text"] == "hello"
+
+
 def test_upload_missing_file_returns_false(config):
     poster = SlackPoster(config)
     assert poster.upload("/does/not/exist.png", channel="#main") is False

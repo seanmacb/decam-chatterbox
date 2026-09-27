@@ -19,9 +19,17 @@ slack:
   # alert both GCN and SCIMMA send, or an internal test event). Leave empty
   # to send them to `channel`, where they are still visibly marked.
   test_channel: "#decam-gw-alerts"
+  # Every real and mock alert still posts to `channel` above regardless of
+  # `priority` below; this is an *additional* cross-post for a high-priority
+  # one, so it is never missed for being buried in a busier channel. Leave
+  # empty to disable cross-posting.
+  urgent_channel: ""
   username: decam-chatterbox
   icon_emoji: ":ocean:"
-  # Slack IDs to @-mention on real alerts, e.g. ["!subteam^S01ABCDEF"].
+  # Slack IDs to @-mention, e.g. ["!subteam^S01ABCDEF"]. Included only on the
+  # urgent_channel cross-post of a high-priority real alert -- see `priority`
+  # below -- not on every post, so people are not paged for a routine BBH
+  # detection.
   mention: []
 
 ingest:
@@ -67,6 +75,24 @@ enrich:
   gracedb: true
   gracedb_service_url: "https://gracedb.ligo.org/api/"
   timeout_s: 5.0
+
+priority:
+  # High-priority triage. This never changes *what* gets posted to
+  # slack.channel -- every real and mock alert still goes there regardless.
+  # It only adds a visible badge and "why" line to the message, gates
+  # slack.mention, and controls the slack.urgent_channel cross-post above.
+  # An alert is high priority when every threshold below is met; set false
+  # to turn the whole feature off (no badge, no cross-post, ever).
+  enabled: true
+  # "About 1 per year", the same convention chatterbox's own Rubin gold/
+  # silver GW classes use.
+  max_far_hz: 3.17e-8
+  # 90% credible area, in deg^2.
+  max_area_deg2: 500.0
+  # Minimum p(BNS) + p(NSBH): a merger likely to involve a neutron star, and
+  # so plausibly EM-bright. Exempted for Burst events, which publish no
+  # classification at all.
+  min_ns_classification: 0.5
 
 paths:
   work_dir: ~/.decam-chatterbox/work

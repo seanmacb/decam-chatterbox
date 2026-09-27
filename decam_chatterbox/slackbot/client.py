@@ -94,6 +94,8 @@ class SlackPoster:
         blocks: list[dict[str, Any]],
         text: str,
         is_test: bool = False,
+        channel: str | None = None,
+        mention: bool = False,
         files: list[Path | str] | None = None,
         label: str = "post",
     ) -> PostedMessage:
@@ -106,7 +108,15 @@ class SlackPoster:
         text : `str`
             Fallback text, used for notifications.
         is_test : `bool`
-            Route to the test channel when one is configured.
+            Route to the test channel when one is configured. Ignored when
+            `channel` is given explicitly.
+        channel : `str`, optional
+            Post here instead of the channel `is_test` would select -- used
+            for the `SlackConfig.urgent_channel` cross-post.
+        mention : `bool`
+            Prepend `SlackConfig.mention` to the fallback text. False by
+            default: a mention is for paging someone, and most posts
+            (including every routine, non-high-priority alert) should not.
         files : `list`, optional
             Image paths to upload into the message's thread.
         label : `str`
@@ -116,10 +126,9 @@ class SlackPoster:
         -------
         posted : `PostedMessage`
         """
-        channel = self.channel_for(is_test)
-        mention = " ".join(f"<{m}>" for m in self.config.slack.mention)
-        if mention and not is_test:
-            text = f"{mention} {text}"
+        channel = channel or self.channel_for(is_test)
+        if mention and self.config.slack.mention:
+            text = " ".join(f"<{m}>" for m in self.config.slack.mention) + f" {text}"
 
         if self.offline:
             return self._write_offline(channel, blocks, text, files, label)

@@ -17,6 +17,7 @@ from ..astro.darkhours import DarkHoursMap
 from ..config import Config
 from ..links import format_link_list, gracedb_link, site_links
 from ..models import Trigger
+from ..priority import PriorityAssessment
 
 __all__ = [
     "build_trigger_blocks",
@@ -95,16 +96,20 @@ def _duration(seconds: float | None) -> str:
 # --------------------------------------------------------------------- header
 
 
-def _plain_header(trigger: Trigger) -> str:
+def _plain_header(trigger: Trigger, priority: PriorityAssessment | None) -> str:
     """Plain-text header: Slack requires <= 150 chars and no emoji."""
     prefix = "" if trigger.is_real else "[NOT REAL] "
+    if priority is not None and priority.is_high_priority:
+        prefix += "[HIGH PRIORITY] "
     kind = "Retraction" if trigger.is_retraction else (trigger.group or "GW event")
     return f"{prefix}{trigger.superevent_id}: {kind} ({trigger.alert_type})"[:150]
 
 
-def _header_blocks(trigger: Trigger) -> list[dict[str, Any]]:
+def _header_blocks(trigger: Trigger, priority: PriorityAssessment | None) -> list[dict[str, Any]]:
     emoji = _ALERT_TYPE_EMOJI.get(trigger.alert_type, ":ocean:")
     marker = "" if trigger.is_real else " :warning: *NOT A REAL SUPEREVENT* (mock/MDC or test)"
+    if priority is not None and priority.is_high_priority:
+        marker += " :rotating_light: *HIGH PRIORITY*"
     header = f"{emoji} *Gravitational wave: {trigger.superevent_id}*{marker}"
     subtitle = f"`{trigger.alert_type}`"
     if trigger.group:
@@ -129,10 +134,13 @@ def _header_blocks(trigger: Trigger) -> list[dict[str, Any]]:
     if timing:
         lines.append(" | ".join(timing))
 
-    return [
-        {"type": "header", "text": {"type": "plain_text", "text": _plain_header(trigger)}},
+    blocks = [
+        {"type": "header", "text": {"type": "plain_text", "text": _plain_header(trigger, priority)}},
         _section(header + "\n" + "\n".join(lines)),
     ]
+    if priority is not None and priority.reasons:
+        blocks.append(_context("*Priority triage:* " + "; ".join(priority.reasons)))
+    return blocks
 
 
 def _retraction_blocks(trigger: Trigger) -> list[dict[str, Any]]:
@@ -320,6 +328,7 @@ def build_trigger_blocks(
     dark_hours: DarkHoursMap | None,
     dark_stats: dict[str, float] | None,
     config: Config,
+    priority: PriorityAssessment | None = None,
 ) -> list[dict[str, Any]]:
     """Build the Block Kit payload for a notice.
 
@@ -336,13 +345,17 @@ def build_trigger_blocks(
         when a localization was available.
     config : `Config`
         Configuration, for links.
+    priority : `PriorityAssessment`, optional
+        Output of `decam_chatterbox.priority.assess_priority`. Adds a
+        high-priority badge to the header and a "why" line beneath it when
+        given; omitted entirely when None.
 
     Returns
     -------
     blocks : `list` [`dict`]
     """
     blocks: list[dict[str, Any]] = []
-    blocks += _header_blocks(trigger)
+    blocks += _header_blocks(trigger, priority)
     blocks.append(_divider())
 
     if trigger.is_retraction:
@@ -441,9 +454,11 @@ def build_failure_blocks(
     return blocks
 
 
-def plain_text_summary(trigger: Trigger) -> str:
+def plain_text_summary(trigger: Trigger, priority: PriorityAssessment | None = None) -> str:
     """Short fallback text, for notifications and refused blocks."""
     prefix = "" if trigger.is_real else "[NOT REAL] "
+    if priority is not None and priority.is_high_priority:
+        prefix += "[HIGH PRIORITY] "
     if trigger.is_retraction:
         return f"{prefix}{trigger.superevent_id}: RETRACTED"
     area = f"{trigger.geometry.area_deg2:,.0f} deg^2" if trigger.geometry else "no localization"

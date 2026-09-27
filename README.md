@@ -41,6 +41,13 @@ the dark-hours plot):
   example is in `tests/data/samples` -- see below).
 - **A chirp-mass line**, best-effort from GraceDB: the one number in this
   message the notice schema has no field for.
+- **A high-priority triage badge**, when `PriorityConfig`'s thresholds on FAR,
+  90% area and NS-classification probability are all met, with the measured
+  value and threshold for each one spelled out underneath rather than left as
+  a bare badge. This never changes what gets posted -- every real and mock
+  alert still reaches `slack.channel` -- it only adds the badge, gates
+  `slack.mention`, and controls an additional cross-post to
+  `slack.urgent_channel`. See [Priority triage](#priority-triage).
 
 **And if decam-chatterbox itself fails, it says so in the channel.** An alert
 nobody hears about is indistinguishable from no alert at all, so a decode
@@ -84,6 +91,38 @@ export SLACK_BOT_TOKEN=xoxb-...
 The token needs the `chat:write` and `files:write` scopes. A bot token is
 required rather than an incoming webhook because webhooks cannot upload
 files, and every post carries the dark-hours plot.
+
+## Priority triage
+
+`priority` in `config.yaml` sets three thresholds -- an alert is high priority
+when every applicable one is met:
+
+- `max_far_hz`: false-alarm rate. Defaults to `3.17e-8` ("about 1 per year",
+  the same convention chatterbox's own Rubin gold/silver GW classes use).
+- `max_area_deg2`: 90% credible area. Defaults to `500`.
+- `min_ns_classification`: minimum p(BNS) + p(NSBH) -- a merger likely to
+  involve a neutron star, and so plausibly EM-bright. Defaults to `0.5`.
+  Exempted for a Burst event, which carries no classification at all; a
+  retraction and anything that is not a real superevent are never high
+  priority regardless of the numbers.
+
+This is triage, not a decision: it never changes what gets posted to
+`slack.channel` -- every real and mock alert goes there either way, same as
+before. What it does control:
+
+- A `:rotating_light: HIGH PRIORITY` badge on the message, with the measured
+  value and threshold for each criterion spelled out underneath (e.g. `FAR
+  9.11e-14 Hz <= 3.17e-08 Hz`), so it is never a bare, unexplained flag.
+- `slack.mention` is included only on a high-priority alert's cross-post (see
+  next point) -- not on every post, so a routine BBH detection does not page
+  anyone.
+- If `slack.urgent_channel` is set, a high-priority alert is *also* posted
+  there (with the mention), in addition to `slack.channel`. This is a
+  cross-post, not a redirect: losing it (a rare Slack API failure) loses only
+  the extra visibility, never the alert itself.
+
+Set `priority.enabled: false` to turn the whole feature off -- no badge, no
+mention, no cross-post, ever, regardless of the thresholds.
 
 ## Where alerts come from
 
@@ -172,8 +211,9 @@ decam_chatterbox/
                   the optional GraceDB chirp-mass lookup
   astro/          skymap credible regions, the CTIO almanac, accessible dark hours
   plots/          dark-hours map with the localization contour drawn on it
+  priority.py     high-priority triage: FAR, area and NS-classification thresholds
   slackbot/       Block Kit construction, delivery
-  app.py          decode -> observability -> post, in one pass
+  app.py          decode -> observability -> priority -> post, in one pass
   cli.py          serve | replay | test-post | doctor
 scripts/
   fetch_samples.py  download the official LVK sample notices for manual testing

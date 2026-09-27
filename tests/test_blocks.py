@@ -6,6 +6,7 @@ from decam_chatterbox.astro.almanac import night_events
 from decam_chatterbox.astro.darkhours import dark_hours_map
 from decam_chatterbox.ingest.decode import decode_notice
 from decam_chatterbox.plots.darkhours import region_hours_summary
+from decam_chatterbox.priority import PriorityAssessment, assess_priority
 from decam_chatterbox.slackbot.blocks import build_trigger_blocks, plain_text_summary
 from decam_chatterbox.slackbot.client import render_blocks_as_text
 
@@ -76,3 +77,30 @@ def test_plain_text_summary_marks_retraction(retraction_notice):
 def test_plain_text_summary_marks_mock(mock_notice):
     trigger = decode_notice(mock_notice)
     assert plain_text_summary(trigger).startswith("[NOT REAL]")
+
+
+def test_high_priority_badge_and_reasons_shown(notice, config):
+    trigger = decode_notice(notice)
+    priority = assess_priority(trigger, config.priority)
+    assert priority.is_high_priority
+    blocks = build_trigger_blocks(trigger, None, None, None, config, priority=priority)
+    text = _text(blocks)
+    assert "HIGH PRIORITY" in text
+    assert "Priority triage" in text
+    assert plain_text_summary(trigger, priority).startswith("[HIGH PRIORITY]")
+
+
+def test_no_priority_badge_when_criteria_not_met(notice, config):
+    trigger = decode_notice(notice)
+    priority = PriorityAssessment(is_high_priority=False, reasons=["FAR 1.00e-06 Hz > 3.17e-08 Hz"])
+    blocks = build_trigger_blocks(trigger, None, None, None, config, priority=priority)
+    text = _text(blocks)
+    assert "HIGH PRIORITY" not in text
+    assert "Priority triage" in text  # the reasons still show, just no badge
+
+
+def test_no_priority_section_when_omitted(notice, config):
+    trigger = decode_notice(notice)
+    blocks = build_trigger_blocks(trigger, None, None, None, config)
+    text = _text(blocks)
+    assert "Priority triage" not in text

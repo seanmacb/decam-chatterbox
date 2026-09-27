@@ -26,6 +26,7 @@ from .ingest.decode import decode_notice
 from .ingest.enrich_gracedb import enrich_chirp_mass
 from .models import Trigger
 from .plots.darkhours import plot_dark_hours, region_hours_summary
+from .priority import PriorityAssessment, assess_priority
 from .slackbot.blocks import build_failure_blocks, build_trigger_blocks, plain_text_summary
 from .slackbot.client import PostedMessage, SlackPoster
 
@@ -42,10 +43,14 @@ class TriggerReport:
     events: NightEvents | None
     dark_hours: DarkHoursMap | None
     dark_stats: dict[str, float] | None
+    priority: PriorityAssessment
     blocks: list[dict[str, Any]]
     text: str
     plots: list[Path] = field(default_factory=list)
     posted: PostedMessage | None = None
+    #: Set only when `priority.is_high_priority` and
+    #: `SlackConfig.urgent_channel` is configured.
+    posted_urgent: PostedMessage | None = None
     elapsed_s: float = 0.0
     #: Non-fatal problems encountered, for reporting in the CLI.
     warnings: list[str] = field(default_factory=list)
@@ -85,6 +90,7 @@ def process_notice(
     trigger = decode_notice(record, skymap_dir=skymap_dir)
     if trigger.localization_error:
         warnings.append(trigger.localization_error)
+    priority = assess_priority(trigger, config.priority)
 
     if out_dir is None:
         out_dir = Path(config.paths.work_dir).expanduser() / "plots" / trigger.superevent_id
@@ -139,14 +145,15 @@ def process_notice(
                 logger.error("Could not render the dark-hours plot: %s", exc)
                 warnings.append(f"dark-hours plot failed: {exc}")
 
-    blocks = build_trigger_blocks(trigger, events, dark_hours, dark_stats, config)
-    text = plain_text_summary(trigger)
+    blocks = build_trigger_blocks(trigger, events, dark_hours, dark_stats, config, priority=priority)
+    text = plain_text_summary(trigger, priority)
 
     report = TriggerReport(
         trigger=trigger,
         events=events,
         dark_hours=dark_hours,
         dark_stats=dark_stats,
+        priority=priority,
         blocks=blocks,
         text=text,
         plots=plots,
@@ -155,17 +162,35 @@ def process_notice(
 
     if post:
         poster = poster or SlackPoster(config)
+        label = f"{trigger.superevent_id}_{trigger.alert_type.lower()}"
         try:
             report.posted = poster.post(
                 blocks,
                 text,
                 is_test=not trigger.is_real,
                 files=plots,
-                label=f"{trigger.superevent_id}_{trigger.alert_type.lower()}",
+                label=label,
             )
         except Exception as exc:
             logger.error("Posting to Slack failed: %s", exc)
             warnings.append(f"Slack post failed: {exc}")
+
+        # A cross-post, not a replacement: the alert already reached the main
+        # channel above regardless of priority, so losing this one only loses
+        # the extra visibility, not the alert itself.
+        if priority.is_high_priority and config.slack.urgent_channel:
+            try:
+                report.posted_urgent = poster.post(
+                    blocks,
+                    text,
+                    channel=config.slack.urgent_channel,
+                    mention=True,
+                    files=plots,
+                    label=f"{label}_urgent",
+                )
+            except Exception as exc:
+                logger.error("Posting the urgent cross-post failed: %s", exc)
+                warnings.append(f"urgent-channel post failed: {exc}")
 
     report.elapsed_s = time.monotonic() - started
     logger.info(

@@ -13,11 +13,30 @@ def test_process_notice_end_to_end(notice, config):
     assert report.events is not None
     assert report.dark_hours is not None
     assert report.dark_stats is not None
+    assert report.priority.is_high_priority  # conftest.make_notice's defaults qualify
     assert len(report.plots) == 1
     assert report.plots[0].is_file()
     assert report.posted is not None
     assert report.posted.offline  # no SLACK_BOT_TOKEN in the test environment
+    assert report.posted_urgent is None  # no urgent_channel configured
     assert not report.warnings
+
+
+def test_process_notice_cross_posts_high_priority_to_urgent_channel(notice, config):
+    config.slack.urgent_channel = "#decam-urgent"
+    report = process_notice(notice, config)
+    assert report.priority.is_high_priority
+    assert report.posted_urgent is not None
+    assert report.posted_urgent.channel == "#decam-urgent"
+
+
+def test_process_notice_does_not_cross_post_low_priority(notice, config):
+    config.slack.urgent_channel = "#decam-urgent"
+    config.priority.max_far_hz = 0.0  # nothing can pass this
+    report = process_notice(notice, config)
+    assert not report.priority.is_high_priority
+    assert report.posted_urgent is None
+    assert report.posted is not None  # still posted to the main channel
 
 
 def test_process_notice_retraction_skips_observability(retraction_notice, config):

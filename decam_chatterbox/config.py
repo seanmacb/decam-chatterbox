@@ -19,6 +19,7 @@ __all__ = [
     "IngestConfig",
     "DarkHoursConfig",
     "EnrichConfig",
+    "PriorityConfig",
     "PathsConfig",
     "LinksConfig",
     "load_config",
@@ -47,9 +48,17 @@ class SlackConfig:
     #: test). Falls back to `channel` when empty, in which case they are
     #: still visibly marked in the message itself.
     test_channel: str = ""
+    #: Every real and mock alert still posts to `channel` regardless of
+    #: `PriorityConfig`; this is an *additional* post, so a high-priority
+    #: alert is never missed for being buried in a busier channel. Empty
+    #: disables cross-posting.
+    urgent_channel: str = ""
     username: str = "decam-chatterbox"
     icon_emoji: str = ":ocean:"
-    #: Slack user/group IDs to mention on real alerts, e.g. ["!subteam^S123"].
+    #: Slack user/group IDs to mention, e.g. ["!subteam^S123"]. Included only
+    #: on the `urgent_channel` cross-post of a high-priority real alert -- see
+    #: `PriorityConfig` -- not on every post, so the people it pages are not
+    #: paged for a routine BBH detection.
     mention: list[str] = field(default_factory=list)
 
 
@@ -122,6 +131,35 @@ class EnrichConfig:
 
 
 @dataclass
+class PriorityConfig:
+    """Thresholds for flagging a real alert as high priority.
+
+    These never change *what* gets posted -- every real and mock alert still
+    reaches `SlackConfig.channel` regardless. They control only the visible
+    priority badge on the message, whether `SlackConfig.mention` is included,
+    and whether the alert is also cross-posted to `SlackConfig.urgent_channel`.
+
+    An alert is high priority when every applicable threshold below is met.
+    "Applicable" matters for classification: a Burst event carries no
+    BNS/NSBH/BBH/Terrestrial classification at all, so that one criterion is
+    exempted for it rather than automatically failing it. A retraction, and
+    anything that is not a real superevent (`Trigger.is_real`), is never
+    high priority.
+    """
+
+    enabled: bool = True
+    #: Maximum false-alarm rate, in Hz. 3.17e-8 Hz is "about 1 per year", the
+    #: threshold chatterbox's own Rubin gold/silver GW classes use.
+    max_far_hz: float = 3.17e-8
+    #: Maximum 90% credible area, in deg^2.
+    max_area_deg2: float = 500.0
+    #: Minimum p(BNS) + p(NSBH): a merger likely to involve a neutron star,
+    #: and so plausibly EM-bright. Exempted for Burst events, which publish
+    #: no classification.
+    min_ns_classification: float = 0.5
+
+
+@dataclass
 class PathsConfig:
     """Filesystem locations for runtime state."""
 
@@ -154,6 +192,7 @@ class Config:
     ingest: IngestConfig = field(default_factory=IngestConfig)
     dark_hours: DarkHoursConfig = field(default_factory=DarkHoursConfig)
     enrich: EnrichConfig = field(default_factory=EnrichConfig)
+    priority: PriorityConfig = field(default_factory=PriorityConfig)
     paths: PathsConfig = field(default_factory=PathsConfig)
     links: LinksConfig = field(default_factory=LinksConfig)
 
