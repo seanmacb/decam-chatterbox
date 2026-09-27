@@ -1,0 +1,82 @@
+# decam-chatterbox configuration.
+#
+# Copy to config.yaml (gitignored) and edit, or keep it outside the repo at
+# ~/.config/decam-chatterbox/config.yaml. Every value here is a default that
+# can be omitted; secrets are never stored in this file, only the name of the
+# environment variable to read them from.
+
+# Informational only -- CTIO is this tool's one site -- but every post says
+# where it thinks it is, so it is named here rather than left implicit.
+site: ctio
+
+slack:
+  # The bot token must be in this environment variable. A bot token is
+  # required rather than an incoming webhook, because webhooks cannot upload
+  # the dark-hours plot. Scopes needed: chat:write, files:write.
+  bot_token_env: SLACK_BOT_TOKEN
+  channel: "#decam-gw-alerts"
+  # Where notices that are not a real superevent go (the hourly mock/MDC
+  # alert both GCN and SCIMMA send, or an internal test event). Leave empty
+  # to send them to `channel`, where they are still visibly marked.
+  test_channel: "#decam-gw-alerts"
+  username: decam-chatterbox
+  icon_emoji: ":ocean:"
+  # Slack IDs to @-mention on real alerts, e.g. ["!subteam^S01ABCDEF"].
+  mention: []
+
+ingest:
+  # scimma: subscribe to igwn.gwalert on SCIMMA's Hopskotch broker (the
+  #         default, and the one live monitoring path).
+  # files:  watch a directory for saved .json/.avro notice files.
+  kind: scimma
+
+  # Authentication is delegated entirely to hop-client's own
+  # ~/.config/hop/auth.toml, set up with `hop auth add`. See the README for
+  # the SCIMMA account-creation and topic-subscription steps -- a fresh
+  # subscription can take up to about an hour to become usable.
+  hop_url: "kafka://kafka.scimma.org/igwn.gwalert"
+  # Kept stable across restarts so Kafka remembers the offset, rather than
+  # re-delivering every alert since the group was first used.
+  hop_group_id: decam-chatterbox
+
+  watch_dir: ~/.decam-chatterbox/incoming
+  poll_interval_s: 1.0
+
+  # Process notices whose superevent_id is not real ("S..."), i.e. the
+  # hourly mock/MDC alert or an internal test event. They are still posted,
+  # routed to slack.test_channel and visibly marked -- the easiest way to
+  # confirm the whole pipeline works without waiting for a real candidate.
+  allow_mock: true
+
+dark_hours:
+  # Resolution of the accessible-dark-hours map. 64 takes well under a
+  # second; 128 a couple of seconds.
+  nside: 64
+  step_minutes: 5.0
+  # Airmass < 2 corresponds to altitude > 30 degrees.
+  airmass_limit: 2.0
+  # Must be -12 or -18: the almanac provides those two crossings.
+  sun_alt_limit_deg: -12.0
+  # Set > 0 to also exclude pixels within this many degrees of the Moon.
+  moon_avoidance_deg: 30.0
+
+enrich:
+  # GraceDB carries one thing the notice schema has no field for: the binned
+  # chirp-mass estimate. Best-effort and time-bounded; failure just omits
+  # that one line rather than affecting anything else.
+  gracedb: true
+  gracedb_service_url: "https://gracedb.ligo.org/api/"
+  timeout_s: 5.0
+
+paths:
+  work_dir: ~/.decam-chatterbox/work
+
+links:
+  # Starting points, not authoritative endpoints -- replace with whatever you
+  # actually want on-call people to open.
+  weather: "https://www.windy.com/-30.165/-70.815?waves,-30.165,-70.815,9"
+  seeing: "https://noirlab.edu/science/observing-noirlab/weather-webcams/cerro-tololo"
+  almanac: ""
+  observatory_status: ""
+  extra: {}
+  #  "DECam status page": "https://www.ctio.noirlab.edu/..."

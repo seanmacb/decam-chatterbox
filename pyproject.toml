@@ -1,0 +1,102 @@
+[build-system]
+requires = ["setuptools>=64", "setuptools-scm>=8"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "decam-chatterbox"
+description = "Low-latency Slack reporting of gravitational-wave alerts for DECam"
+readme = "README.md"
+license = { text = "GPL" }
+requires-python = ">=3.11"
+dynamic = ["version"]
+dependencies = [
+    "numpy",
+    "matplotlib",
+    "astropy",
+    "healpy",
+    "pyyaml",
+]
+
+[project.optional-dependencies]
+# Everything needed to actually read a real skymap and compute observability.
+# Kept as an extra (rather than a hard dependency) so a bare install can still
+# run the CLI and the test suite's non-astronomy tests.
+gw = [
+    "astroplan",
+    "ligo.skymap",
+    "ligo-gracedb",
+]
+# Alert transport: subscribing to igwn.gwalert on SCIMMA's Hopskotch broker.
+scimma = [
+    "hop-client>=0.11.0",
+    "fastavro",
+]
+slack = [
+    "slack-sdk",
+]
+test = [
+    "pytest",
+    "pytest-cov",
+    "black",
+    "ruff",
+    "isort",
+]
+
+[project.scripts]
+decam-chatterbox = "decam_chatterbox.cli:main"
+
+[tool.setuptools_scm]
+fallback_version = "0.1.0"
+
+[tool.setuptools.packages.find]
+where = [""]
+include = ["decam_chatterbox*"]
+
+[tool.pytest.ini_options]
+addopts = "--ignore-glob=*/version.py"
+testpaths = ["tests"]
+
+[tool.mypy]
+disallow_untyped_defs = "True"
+ignore_missing_imports = "True"
+
+[tool.black]
+line-length = 110
+target-version = ["py312"]
+
+[tool.isort]
+profile = "black"
+line_length = 110
+
+[tool.ruff]
+exclude = ["__init__.py"]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "N", "W"]
+extend-select = ["RUF100"]
+ignore = [
+    "N802",
+    "N803",
+    "N806",
+    "N812",
+    "N815",
+    "N816",
+    "N999",
+    "D100",
+    "D102",
+    "D104",
+    "D105",
+    "D107",
+    "D200",
+    "D205",
+    "D400",
+    "E712",
+]
+
+[tool.ruff.lint.pycodestyle]
+max-doc-length = 79
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
