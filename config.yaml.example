@@ -24,6 +24,11 @@ slack:
   # one, so it is never missed for being buried in a busier channel. Leave
   # empty to disable cross-posting.
   urgent_channel: ""
+  # Where the hourly heartbeat and the shutdown notice go (see `heartbeat`
+  # below). Leave empty to send them to `channel` too; a separate channel
+  # keeps that routine "still running" traffic out of the one people watch
+  # for alerts.
+  heartbeat_channel: ""
   username: decam-chatterbox
   icon_emoji: ":ocean:"
   # Slack IDs to @-mention, e.g. ["!subteam^S01ABCDEF"]. Included only on the
@@ -93,6 +98,19 @@ priority:
   # so plausibly EM-bright. Exempted for Burst events, which publish no
   # classification at all.
   min_ns_classification: 0.5
+
+heartbeat:
+  # A periodic "I'm still running" post, for `decam-chatterbox serve` only
+  # (not `replay`). A decode or Slack failure already posts, but only
+  # because something raised; a hung process, or a broker that has quietly
+  # stopped delivering without erroring, would otherwise say nothing at all.
+  # `serve` also posts once, in the same style, on a deliberate stop
+  # (Ctrl-C, `kill`, a systemd/Docker restart, which send SIGTERM), so that
+  # reads as "stopped on purpose" rather than "just vanished". There is no
+  # way to catch SIGKILL (`kill -9`) -- nothing running in any language can.
+  enabled: true
+  # Seconds between posts. 3600 is hourly.
+  interval_s: 3600.0
 
 paths:
   work_dir: ~/.decam-chatterbox/work

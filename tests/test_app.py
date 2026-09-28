@@ -1,8 +1,12 @@
 """End-to-end tests for decam_chatterbox.app, offline throughout."""
 
+import json
+import signal as signal_module
+
 from conftest import make_notice
 
-from decam_chatterbox.app import TriggerReport, post_failure, process_notice
+import decam_chatterbox.app as app_module
+from decam_chatterbox.app import TriggerReport, post_failure, process_notice, run_service
 from decam_chatterbox.slackbot.client import SlackPoster
 
 
@@ -75,3 +79,83 @@ def config_work_posts_dir(config):
     from pathlib import Path
 
     return Path(config.paths.work_dir).expanduser() / "posts"
+
+
+class _FakeHeartbeat:
+    """Stands in for `decam_chatterbox.heartbeat.Heartbeat`.
+
+    The heartbeat's own timer/threading behaviour is covered in
+    test_heartbeat.py; these tests only need to know `run_service` starts and
+    stops one.
+    """
+
+    calls: list[str] = []
+
+    def __init__(self, config, poster, status):
+        type(self).calls.append("init")
+
+    def start(self):
+        type(self).calls.append("start")
+
+    def stop(self, timeout=5.0):
+        type(self).calls.append("stop")
+
+
+def test_run_service_replay_handles_every_record_and_returns_the_count(tmp_path, notice, config):
+    path1 = tmp_path / "a.json"
+    path2 = tmp_path / "b.json"
+    path1.write_text(json.dumps(notice))
+    path2.write_text(json.dumps(make_notice(superevent_id="S260814b")))
+
+    handled = run_service(config, paths=[path1, path2])
+    assert handled == 2
+
+
+def test_run_service_starts_and_stops_the_heartbeat(tmp_path, notice, config, monkeypatch):
+    path = tmp_path / "a.json"
+    path.write_text(json.dumps(notice))
+    _FakeHeartbeat.calls = []
+    monkeypatch.setattr(app_module, "Heartbeat", _FakeHeartbeat)
+
+    run_service(config, paths=[path])
+    assert _FakeHeartbeat.calls == ["init", "start", "stop"]
+
+
+def test_run_service_posts_shutdown_on_keyboard_interrupt(tmp_path, notice, config, monkeypatch):
+    path = tmp_path / "a.json"
+    path.write_text(json.dumps(notice))
+
+    def raise_interrupt(record, config, poster=None):
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(app_module, "process_notice", raise_interrupt)
+    handled = run_service(config, paths=[path])
+    assert handled == 0
+
+    payload = json.loads((config_work_posts_dir(config) / "shutdown.json").read_text())
+    assert "shutting down" in payload["text"].lower()
+    assert "interrupted" in payload["text"].lower()
+
+
+def test_run_service_installs_a_sigterm_handler_like_ctrl_c(tmp_path, notice, config, monkeypatch):
+    path = tmp_path / "a.json"
+    path.write_text(json.dumps(notice))
+    calls = []
+    monkeypatch.setattr(signal_module, "signal", lambda *args: calls.append(args))
+
+    run_service(config, paths=[path])
+    assert calls
+    assert calls[0] == (signal_module.SIGTERM, signal_module.default_int_handler)
+
+
+def test_run_service_tolerates_signal_registration_failure(tmp_path, notice, config, monkeypatch):
+    """Registering SIGTERM only works on the main thread; elsewhere it must
+    degrade quietly rather than take the whole service down."""
+
+    def raise_value_error(*args):
+        raise ValueError("signal only works in main thread of the main interpreter")
+
+    monkeypatch.setattr(signal_module, "signal", raise_value_error)
+    path = tmp_path / "a.json"
+    path.write_text(json.dumps(notice))
+    assert run_service(config, paths=[path]) == 1

@@ -109,6 +109,9 @@ class FileAlertSource(AlertSource):
             found.append(path)
         return found
 
+    def describe(self) -> str:
+        return f"{self.watch_dir} (files)"
+
     def __iter__(self) -> Iterator[tuple[dict[str, Any], dict[str, Any]]]:
         from .decode import load_record_file
 

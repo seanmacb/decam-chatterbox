@@ -11,6 +11,7 @@ still goes out; if chirp-mass enrichment fails, the post just omits it.
 """
 
 import logging
+import signal
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -22,6 +23,7 @@ from astropy.time import Time
 from .astro.almanac import NightEvents, night_events
 from .astro.darkhours import DarkHoursMap, dark_hours_map
 from .config import Config
+from .heartbeat import Heartbeat, ServiceStatus, post_shutdown
 from .ingest.decode import decode_notice
 from .ingest.enrich_gracedb import enrich_chirp_mass
 from .models import Trigger
@@ -259,8 +261,20 @@ def post_failure(
         return None
 
 
+def _describe_source(source: Any, config: Config) -> str:
+    """Where a source is watching, for a reader who missed the startup log."""
+    describe = getattr(source, "describe", None)
+    return describe() if callable(describe) else config.ingest.kind
+
+
 def run_service(config: Config, paths=None) -> int:
     """Consume the configured source and post about every notice.
+
+    Runs until interrupted (Ctrl-C or SIGTERM, which is installed to behave
+    like Ctrl-C for the duration of this call) or until the source raises. A
+    heartbeat posts every ``heartbeat.interval_s`` on its own thread so a hang
+    or a silently-dead broker connection is visible even between alerts, and
+    a deliberate stop posts its own notice rather than just going quiet.
 
     Parameters
     ----------
@@ -276,8 +290,22 @@ def run_service(config: Config, paths=None) -> int:
     """
     from .ingest.source import make_source
 
+    try:
+        # Makes `kill` (and a systemd/Docker stop, which sends SIGTERM by
+        # default) raise KeyboardInterrupt exactly as Ctrl-C does, so both
+        # converge on the one shutdown path below. Only possible from the
+        # main thread; harmless to skip elsewhere; Ctrl-C still works either
+        # way.
+        signal.signal(signal.SIGTERM, signal.default_int_handler)
+    except ValueError:
+        logger.debug("Could not install a SIGTERM handler (not the main thread)")
+
     source = make_source(config, paths=paths)
     poster = SlackPoster(config)
+    status = ServiceStatus(started_at=Time.now(), origin=_describe_source(source, config))
+    heartbeat = Heartbeat(config, poster, status)
+    heartbeat.start()
+
     handled = 0
     try:
         for record, metadata in source:
@@ -285,6 +313,8 @@ def run_service(config: Config, paths=None) -> int:
             try:
                 process_notice(record, config, poster=poster)
                 handled += 1
+                status.handled = handled
+                status.last_handled_at = Time.now()
             except Exception as exc:
                 # A dropped alert must never be silent. `record` may not have
                 # decoded, so its fields are read defensively -- the
@@ -303,15 +333,19 @@ def run_service(config: Config, paths=None) -> int:
                 # stream on it would stall every later alert.
                 source.mark_done(metadata)
     except KeyboardInterrupt:
-        logger.info("Interrupted; shutting down after %d record(s)", handled)
+        post_shutdown(status, config, poster, reason="interrupted")
     except Exception as exc:
         # The stream itself failed -- the broker dropped us, credentials
         # expired. The service is about to stop consuming alerts, which is
         # precisely the thing nobody would otherwise notice.
-        describe = getattr(source, "describe", None)
-        origin = describe() if callable(describe) else config.ingest.kind
-        post_failure(f"monitoring for alerts ({config.ingest.kind})", exc, poster, origin=str(origin))
+        post_failure(
+            f"monitoring for alerts ({config.ingest.kind})",
+            exc,
+            poster,
+            origin=_describe_source(source, config),
+        )
         raise
     finally:
+        heartbeat.stop()
         source.close()
     return handled

@@ -20,6 +20,7 @@ __all__ = [
     "DarkHoursConfig",
     "EnrichConfig",
     "PriorityConfig",
+    "HeartbeatConfig",
     "PathsConfig",
     "LinksConfig",
     "load_config",
@@ -53,6 +54,10 @@ class SlackConfig:
     #: alert is never missed for being buried in a busier channel. Empty
     #: disables cross-posting.
     urgent_channel: str = ""
+    #: Where `HeartbeatConfig` posts go, and the shutdown notice. Falls back
+    #: to `channel` when empty. A separate channel keeps routine "still
+    #: running" noise out of the one people actually watch for alerts.
+    heartbeat_channel: str = ""
     username: str = "decam-chatterbox"
     icon_emoji: str = ":ocean:"
     #: Slack user/group IDs to mention, e.g. ["!subteam^S123"]. Included only
@@ -160,6 +165,21 @@ class PriorityConfig:
 
 
 @dataclass
+class HeartbeatConfig:
+    """A periodic "I'm still running" post, for the ``serve`` command only.
+
+    A failure only posts when something raises; a hung process, or a broker
+    that has quietly stopped delivering without erroring, would otherwise say
+    nothing at all -- indistinguishable from a quiet night with no alerts.
+    This exists to rule that out.
+    """
+
+    enabled: bool = True
+    #: Seconds between posts. 3600 is hourly.
+    interval_s: float = 3600.0
+
+
+@dataclass
 class PathsConfig:
     """Filesystem locations for runtime state."""
 
@@ -193,6 +213,7 @@ class Config:
     dark_hours: DarkHoursConfig = field(default_factory=DarkHoursConfig)
     enrich: EnrichConfig = field(default_factory=EnrichConfig)
     priority: PriorityConfig = field(default_factory=PriorityConfig)
+    heartbeat: HeartbeatConfig = field(default_factory=HeartbeatConfig)
     paths: PathsConfig = field(default_factory=PathsConfig)
     links: LinksConfig = field(default_factory=LinksConfig)
 

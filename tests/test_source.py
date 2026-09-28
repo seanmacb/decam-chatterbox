@@ -21,6 +21,11 @@ def test_replay_source_yields_each_path_in_order(tmp_path, notice, retraction_no
     assert records[0][1]["transport"] == "replay"
 
 
+def test_file_source_describe_names_the_watch_dir(tmp_path):
+    source = FileAlertSource(str(tmp_path))
+    assert str(tmp_path) in source.describe()
+
+
 def test_file_source_picks_up_new_files_once(tmp_path, notice):
     (tmp_path / "s1.json").write_text(json.dumps(notice))
     source = FileAlertSource(str(tmp_path), once=True)

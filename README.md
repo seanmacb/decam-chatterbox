@@ -124,6 +124,33 @@ before. What it does control:
 Set `priority.enabled: false` to turn the whole feature off -- no badge, no
 mention, no cross-post, ever, regardless of the thresholds.
 
+## Heartbeat and shutdown notice
+
+Both apply only to `decam-chatterbox serve` -- a `replay` is a one-shot
+inspection, not a long-running service, so neither is relevant to it.
+
+**`heartbeat.enabled` (default true) posts a short "still running" message
+every `heartbeat.interval_s` (default 3600, hourly)**, on its own background
+thread so it keeps going even between alerts: uptime, the ingest source it is
+watching, and how many alerts it has handled and when it last handled one.
+The failure posts elsewhere in this tool only fire because something raised;
+a hung process, or a SCIMMA connection that has quietly died without an
+exception, would otherwise be indistinguishable from a quiet night. The
+heartbeat is what rules that out. It posts to `slack.heartbeat_channel`
+(falling back to `slack.channel`).
+
+**`serve` also posts once when it stops, in the same style**, on Ctrl-C, on
+`kill` (`SIGTERM`, which is installed to behave exactly like Ctrl-C for the
+duration of the run -- also what a systemd `stop` or `docker stop` sends by
+default), or when the ingest source itself fails (which already posts as a
+failure -- see [What it posts](#what-it-posts)). Both read the same status
+line as the heartbeat, so the channel can tell "stopped on purpose" from
+"crashed" or "hung" without cross-referencing a log. There is no way to catch
+`kill -9` (`SIGKILL`) from inside the process -- nothing running in any
+language can -- so an unclean stop that way is still silent; a `kill -9` is
+also, deliberately, not something an operator reaches for over a graceful
+stop.
+
 ## Where alerts come from
 
 LVK alerts are distributed over Kafka in two equivalent ways: as JSON from
@@ -212,6 +239,7 @@ decam_chatterbox/
   astro/          skymap credible regions, the CTIO almanac, accessible dark hours
   plots/          dark-hours map with the localization contour drawn on it
   priority.py     high-priority triage: FAR, area and NS-classification thresholds
+  heartbeat.py    the hourly "still running" post and the shutdown notice (serve only)
   slackbot/       Block Kit construction, delivery
   app.py          decode -> observability -> priority -> post, in one pass
   cli.py          serve | replay | test-post | doctor
