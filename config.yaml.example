@@ -48,9 +48,13 @@ ingest:
   # the SCIMMA account-creation and topic-subscription steps -- a fresh
   # subscription can take up to about an hour to become usable.
   hop_url: "kafka://kafka.scimma.org/igwn.gwalert"
-  # Kept stable across restarts so Kafka remembers the offset, rather than
-  # re-delivering every alert since the group was first used.
-  hop_group_id: decam-chatterbox
+  # Empty derives one from the credential in ~/.config/hop/auth.toml
+  # (<username>-decam-chatterbox). Leave it empty: SCIMMA's Kafka ACLs only
+  # authorize a consumer group matching your own credential's username, so a
+  # fixed string here (e.g. "decam-chatterbox") fails at connect time with
+  # GROUP_AUTHORIZATION_FAILED. Set this explicitly only to run more than one
+  # instance under the same credential with independently-tracked offsets.
+  hop_group_id: ""
 
   watch_dir: ~/.decam-chatterbox/incoming
   poll_interval_s: 1.0

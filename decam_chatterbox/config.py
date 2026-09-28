@@ -87,10 +87,14 @@ class IngestConfig:
     #: ``~/.config/hop/auth.toml``, set up with ``hop auth add`` -- see the
     #: README for the SCIMMA account and topic-subscription steps.
     hop_url: str = "kafka://kafka.scimma.org/igwn.gwalert"
-    #: Consumer group. Keeping this stable across restarts is what lets Kafka
-    #: remember the offset, so a restart does not re-deliver every alert
-    #: since the group was first used.
-    hop_group_id: str = "decam-chatterbox"
+    #: Consumer group. Empty derives one from the credential in
+    #: ``~/.config/hop/auth.toml`` (``{username}-decam-chatterbox``): SCIMMA's
+    #: Kafka ACLs only authorize a consumer group matching the credential's
+    #: own username, so an arbitrary fixed string here fails at connect time
+    #: with ``GROUP_AUTHORIZATION_FAILED``. Keeping it stable across restarts
+    #: (rather than a new random one each time) is what lets Kafka remember
+    #: the offset, so a restart does not re-deliver every alert.
+    hop_group_id: str = ""
     #: Directory watched by the ``files`` source.
     watch_dir: str = "~/.decam-chatterbox/incoming"
     #: Seconds between directory scans.

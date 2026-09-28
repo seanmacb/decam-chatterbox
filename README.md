@@ -172,6 +172,23 @@ uses SCIMMA** (`ingest.kind: scimma`, the default), via `hop-client`:
 
 `decam-chatterbox doctor` checks whether `~/.config/hop/auth.toml` exists.
 
+**`KafkaError{code=GROUP_AUTHORIZATION_FAILED, ...}` at startup** means
+SCIMMA's Kafka ACLs rejected the consumer group id, not the credential or the
+topic subscription -- those fail differently (see below). SCIMMA only
+authorizes a consumer group that matches your own credential's username, so
+`ingest.hop_group_id` defaults to empty and is derived automatically as
+`{your hop username}-decam-chatterbox`, which satisfies that rule and (unlike
+leaving it to hop-client's own fallback, a fresh random suffix every time) is
+stable across restarts, so Kafka still remembers the offset. This should not
+come up with the default; if it does, `hop auth list` will show whether a
+credential for `kafka.scimma.org` is present at all, and the log line just
+above the traceback names the group id decam-chatterbox actually tried to
+use.
+
+**`TOPIC_AUTHORIZATION_FAILED`** instead means step 3 was missed or has not
+propagated yet -- the credential exists but isn't subscribed to
+`igwn.gwalert`, or the up-to-an-hour delay after subscribing hasn't passed.
+
 **Real events are rare (tens to hundreds a year); mock events are not.** Both
 GCN and SCIMMA send a sample alert for the mock superevent `MS181101ab` once
 an hour, and GraceDB's own test infrastructure occasionally injects a `T...`

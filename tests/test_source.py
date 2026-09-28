@@ -83,3 +83,65 @@ def test_scimma_source_requires_a_url():
 
     with pytest.raises(ValueError):
         ScimmaAlertSource(url="")
+
+
+def test_default_group_id_derives_from_the_matching_credential(monkeypatch):
+    from decam_chatterbox.ingest.source import _default_group_id
+
+    class FakeCredential:
+        username = "alice123"
+
+    monkeypatch.setattr("hop.auth.load_auth", lambda: ["a fake credential list"])
+    monkeypatch.setattr("hop.auth.select_matching_auth", lambda creds, host: FakeCredential())
+
+    group_id = _default_group_id("kafka://kafka.scimma.org/igwn.gwalert")
+    assert group_id == "alice123-decam-chatterbox"
+
+
+def test_default_group_id_none_when_no_credential_found(monkeypatch):
+    from decam_chatterbox.ingest.source import _default_group_id
+
+    def raise_not_found():
+        raise FileNotFoundError("~/.config/hop/auth.toml not found")
+
+    monkeypatch.setattr("hop.auth.load_auth", raise_not_found)
+    assert _default_group_id("kafka://kafka.scimma.org/igwn.gwalert") is None
+
+
+def test_scimma_source_open_uses_derived_group_id_when_unset(monkeypatch):
+    from decam_chatterbox.ingest.source import ScimmaAlertSource
+
+    monkeypatch.setattr(
+        "decam_chatterbox.ingest.source._default_group_id", lambda url: "alice123-decam-chatterbox"
+    )
+
+    captured = {}
+
+    class FakeStream:
+        def open(self, url, mode="r", group_id=None):
+            captured["group_id"] = group_id
+            return "a fake stream"
+
+    monkeypatch.setattr("hop.io.Stream", lambda auth=True: FakeStream())
+
+    source = ScimmaAlertSource(url="kafka://kafka.scimma.org/igwn.gwalert")
+    assert source._open() == "a fake stream"
+    assert captured["group_id"] == "alice123-decam-chatterbox"
+    assert source.group_id == "alice123-decam-chatterbox"  # cached for describe()
+
+
+def test_scimma_source_open_respects_an_explicit_group_id(monkeypatch):
+    captured = {}
+
+    class FakeStream:
+        def open(self, url, mode="r", group_id=None):
+            captured["group_id"] = group_id
+            return "a fake stream"
+
+    monkeypatch.setattr("hop.io.Stream", lambda auth=True: FakeStream())
+
+    from decam_chatterbox.ingest.source import ScimmaAlertSource
+
+    source = ScimmaAlertSource(url="kafka://kafka.scimma.org/igwn.gwalert", group_id="my-own-group")
+    source._open()
+    assert captured["group_id"] == "my-own-group"

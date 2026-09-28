@@ -152,10 +152,13 @@ class ScimmaAlertSource(AlertSource):
     `decam_chatterbox.models.Trigger.is_real`.
     """
 
-    def __init__(self, url: str, group_id: str = "decam-chatterbox") -> None:
+    def __init__(self, url: str, group_id: str = "") -> None:
         if not url:
             raise ValueError("No hop URL configured. Set ingest.hop_url.")
         self.url = url
+        #: Empty means "derive one from the authenticated credential" --
+        #: see `_default_group_id`. Resolved lazily in `_open`, not here,
+        #: since it needs to read `~/.config/hop/auth.toml`.
         self.group_id = group_id
         self._stream = None
 
@@ -164,6 +167,9 @@ class ScimmaAlertSource(AlertSource):
             import hop
         except ImportError as exc:  # pragma: no cover - optional dependency
             raise ImportError("SCIMMA ingest requires hop-client (pip install hop-client)") from exc
+        # Cached back onto self.group_id so describe() reflects what was
+        # actually used, including after this resolves it.
+        self.group_id = self.group_id or _default_group_id(self.url)
         logger.info("Opening %s as group %s", self.url, self.group_id)
         return hop.io.Stream(auth=True).open(self.url, mode="r", group_id=self.group_id)
 
@@ -192,7 +198,46 @@ class ScimmaAlertSource(AlertSource):
             self._stream = None
 
     def describe(self) -> str:
-        return f"{self.url} (group {self.group_id})"
+        return f"{self.url} (group {self.group_id or 'not yet resolved'})"
+
+
+def _default_group_id(url: str) -> str | None:
+    """A stable consumer group id derived from the authenticated credential.
+
+    SCIMMA's Kafka ACLs authorize a consumer group only when it matches the
+    credential's own username (or is prefixed with it): an arbitrary fixed
+    string is rejected with ``GROUP_AUTHORIZATION_FAILED``, a Kafka-level
+    authorization error distinct from a topic permission problem. hop-client
+    itself only ever falls back to a *randomly suffixed* group id when none
+    is given (see ``hop.io._generate_group_id``), which would satisfy the
+    same ACL but changes on every restart, so Kafka can never resume from
+    where a previous run left off. Deriving it once, deterministically, from
+    the credential that ``hop auth add`` already stored keeps both properties.
+
+    Returns
+    -------
+    group_id : `str` or None
+        None when no credential can be resolved (no ``~/.config/hop/auth.toml``
+        yet, or more than one credential matches), in which case the caller
+        should fall back to hop-client's own random default and the operator
+        should set ``ingest.hop_group_id`` explicitly once they know their
+        SCIMMA username.
+    """
+    try:
+        from adc.kafka import parse_kafka_url
+        from hop.auth import load_auth, select_matching_auth
+
+        _, broker_addresses, _ = parse_kafka_url(url)
+        credential = select_matching_auth(load_auth(), broker_addresses[0])
+    except Exception as exc:
+        logger.warning(
+            "Could not derive a stable consumer group id from ~/.config/hop/auth.toml (%s); "
+            "hop-client will generate a random one instead, so a restart will not resume "
+            "from where it left off. Set ingest.hop_group_id explicitly to avoid this.",
+            exc,
+        )
+        return None
+    return f"{credential.username}-decam-chatterbox"
 
 
 def _unwrap(message: Any) -> list[dict[str, Any]]:
