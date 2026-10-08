@@ -56,6 +56,8 @@ def test_mention_only_included_when_requested(config):
     poster.post([], "hello", mention=True, label="with_mention")
     payload_with_mention = json.loads((poster.output_dir / "with_mention.json").read_text())
     assert "!subteam^S123" in payload_with_mention["text"]
+    # Also rendered as a visible leading block, not only in the fallback text.
+    assert "!subteam^S123" in payload_with_mention["blocks"][0]["text"]["text"]
 
 
 def test_mention_omitted_when_none_configured(config):

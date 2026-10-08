@@ -26,6 +26,7 @@ __all__ = [
     "credible_mask",
     "contour_levels",
     "localization_region",
+    "peak_position",
     "geometry_from_mask",
     "localization_from_probability",
     "save_notice_skymap",
@@ -156,7 +157,43 @@ def localization_region(localization: Localization, nside: int | None = None) ->
     return credible_mask(prob, localization.credible_level)
 
 
-def geometry_from_mask(mask: np.ndarray, nside: int) -> Geometry:
+def peak_position(prob_map: np.ndarray) -> tuple[float, float]:
+    """RA and Dec of the most probable pixel of a RING probability map.
+
+    Pixels tied for the maximum (a flat map, or a native pixel coarser than
+    the working resolution that was split into equal children) are resolved
+    to whichever of them lies closest to the tied set's vector mean, so the
+    answer is always a genuine maximum-probability pixel rather than an
+    arbitrary first one in array order.
+
+    Parameters
+    ----------
+    prob_map : `numpy.ndarray`
+        Probability per pixel, full sky, RING ordering.
+
+    Returns
+    -------
+    ra_deg, dec_deg : `float`
+        NaN when the map has no positive probability.
+    """
+    prob_map = np.asarray(prob_map, dtype=float)
+    if prob_map.size == 0 or not prob_map.max() > 0:
+        return float("nan"), float("nan")
+    tied = np.flatnonzero(prob_map >= prob_map.max() * (1.0 - 1e-9))
+    nside = hp.npix2nside(prob_map.size)
+    if tied.size > 1:
+        vectors = np.array(hp.pix2vec(nside, tied))
+        mean = vectors.mean(axis=1)
+        norm = np.linalg.norm(mean)
+        if norm > 0:
+            tied = tied[[int(np.argmax((mean / norm) @ vectors))]]
+        else:
+            tied = tied[:1]
+    ra, dec = hp.pix2ang(nside, int(tied[0]), lonlat=True)
+    return float(ra), float(dec)
+
+
+def geometry_from_mask(mask: np.ndarray, nside: int, prob_map: np.ndarray) -> Geometry:
     """Derive sky geometry from a boolean credible-region mask in RING order.
 
     Declination limits use pixel *corners* rather than centres, so the
@@ -168,6 +205,9 @@ def geometry_from_mask(mask: np.ndarray, nside: int) -> Geometry:
         Boolean, RING ordering, full sky.
     nside : `int`
         Map resolution.
+    prob_map : `numpy.ndarray`
+        Probability per pixel at `nside`, RING ordering; the marked position
+        is its maximum (`peak_position`).
 
     Returns
     -------
@@ -182,8 +222,8 @@ def geometry_from_mask(mask: np.ndarray, nside: int) -> Geometry:
             area_deg2=0.0,
             dec_min_deg=float("nan"),
             dec_max_deg=float("nan"),
-            centroid_ra_deg=float("nan"),
-            centroid_dec_deg=float("nan"),
+            peak_ra_deg=float("nan"),
+            peak_dec_deg=float("nan"),
             gal_b_abs_min_deg=float("nan"),
             gal_b_abs_max_deg=float("nan"),
             n_pixels=0,
@@ -196,15 +236,7 @@ def geometry_from_mask(mask: np.ndarray, nside: int) -> Geometry:
     dec_min = float(corner_dec.min())
     dec_max = float(corner_dec.max())
 
-    # Vector mean, so a region spanning RA = 0 does not average to RA = 180.
-    vecs = hp.pix2vec(nside, pixels)
-    mean_vec = np.array([np.mean(v) for v in vecs])
-    norm = np.linalg.norm(mean_vec)
-    if norm == 0:
-        centroid_ra, centroid_dec = float("nan"), float("nan")
-    else:
-        c_ra, c_dec = hp.vec2ang(mean_vec / norm, lonlat=True)
-        centroid_ra, centroid_dec = float(c_ra[0]), float(c_dec[0])
+    peak_ra, peak_dec = peak_position(prob_map)
 
     gal_b = np.abs(SkyCoord(ra=ra, dec=dec, unit="deg").galactic.b.deg)
 
@@ -212,8 +244,8 @@ def geometry_from_mask(mask: np.ndarray, nside: int) -> Geometry:
         area_deg2=float(pixels.size * pixel_area),
         dec_min_deg=dec_min,
         dec_max_deg=dec_max,
-        centroid_ra_deg=centroid_ra,
-        centroid_dec_deg=centroid_dec,
+        peak_ra_deg=peak_ra,
+        peak_dec_deg=peak_dec,
         gal_b_abs_min_deg=float(gal_b.min()),
         gal_b_abs_max_deg=float(gal_b.max()),
         n_pixels=int(pixels.size),

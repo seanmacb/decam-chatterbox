@@ -121,6 +121,21 @@ before. What it does control:
   cross-post, not a redirect: losing it (a rare Slack API failure) loses only
   the extra visibility, never the alert itself.
 
+**Testing the page itself.** `test-ping` posts a clearly-marked "TEST ping --
+no action needed" message that @-mentions `slack.mention`, to
+`slack.urgent_channel` (or `slack.channel` if that is empty), so the on-call
+path can be checked without waiting for a real high-priority alert. It really
+notifies whoever is listed, so it prints who and where and asks first (skip
+with `--yes`). To rehearse without paging anyone, point it at yourself:
+
+```bash
+python -m decam_chatterbox.cli test-ping --mention U0123ABCD --channel "#my-test-channel"
+```
+
+Find a user ID under *Profile -> three dots -> Copy member ID*, and a user
+group's under *People -> User groups* (`!subteam^S...`). The mention is also
+rendered as a visible first block, not just carried in the notification text.
+
 Set `priority.enabled: false` to turn the whole feature off -- no badge, no
 mention, no cross-post, ever, regardless of the thresholds.
 
@@ -137,19 +152,45 @@ The failure posts elsewhere in this tool only fire because something raised;
 a hung process, or a SCIMMA connection that has quietly died without an
 exception, would otherwise be indistinguishable from a quiet night. The
 heartbeat is what rules that out. It posts to `slack.heartbeat_channel`
-(falling back to `slack.channel`).
+(falling back to `slack.channel`, including when that channel cannot be
+reached).
 
-**`serve` also posts once when it stops, in the same style**, on Ctrl-C, on
-`kill` (`SIGTERM`, which is installed to behave exactly like Ctrl-C for the
-duration of the run -- also what a systemd `stop` or `docker stop` sends by
-default), or when the ingest source itself fails (which already posts as a
-failure -- see [What it posts](#what-it-posts)). Both read the same status
-line as the heartbeat, so the channel can tell "stopped on purpose" from
-"crashed" or "hung" without cross-referencing a log. There is no way to catch
-`kill -9` (`SIGKILL`) from inside the process -- nothing running in any
-language can -- so an unclean stop that way is still silent; a `kill -9` is
-also, deliberately, not something an operator reaches for over a graceful
-stop.
+**`serve` also posts once when it starts, and once when it stops, in the same
+style.** The start post is also the immediate check on `slack.heartbeat_channel`:
+a misspelled channel, or a private one the bot was never invited to (Slack
+reports both as `channel_not_found`), would otherwise only show up when the
+first heartbeat came due an hour later. If the heartbeat channel cannot be
+posted to, the heartbeat, start and stop posts all fall back to `slack.channel`
+with the Slack error attached, rather than becoming a log line nobody reads.
+Fix it by inviting the bot (`/invite @<bot name>`) or by setting the channel's
+ID (`C0123456789`) instead of its name.
+
+The stop post is sent on Ctrl-C, on `SIGTERM` (`kill`, `systemctl stop`,
+`docker stop`, a host shutdown) and on `SIGHUP` (a closed ssh or tmux session,
+which kills a process instantly by default; a `nohup`'d process keeps ignoring
+it, as the operator asked). All three are installed to behave exactly like
+Ctrl-C for the duration of the run, and once the stop post has started, further
+`SIGTERM`/`SIGHUP` are ignored so a host that sends both in quick succession
+does not interrupt the post part-way. It is also posted when the ingest source
+itself fails (which already posts as a failure -- see
+[What it posts](#what-it-posts)). Both read the same status line as the
+heartbeat, so the channel can tell "stopped on purpose" from "crashed" or
+"hung" without cross-referencing a log.
+
+Nothing can catch `SIGKILL` (`kill -9`), which is also what a service manager
+sends when a stop takes longer than its timeout, or what the kernel's
+out-of-memory killer sends. A missing stop post together with a stopped
+heartbeat means one of those, or a power loss. Running under systemd gives the
+most reliable stop, since it sends `SIGTERM` first and waits:
+
+```ini
+[Service]
+ExecStart=/path/to/.venv/bin/python -m decam_chatterbox.cli serve
+WorkingDirectory=/path/to/decam-chatterbox
+Restart=on-failure
+KillSignal=SIGTERM
+TimeoutStopSec=60
+```
 
 ## Where alerts come from
 
@@ -259,7 +300,7 @@ decam_chatterbox/
   heartbeat.py    the hourly "still running" post and the shutdown notice (serve only)
   slackbot/       Block Kit construction, delivery
   app.py          decode -> observability -> priority -> post, in one pass
-  cli.py          serve | replay | test-post | doctor
+  cli.py          serve | replay | test-post | test-ping | doctor
 scripts/
   fetch_samples.py  download the official LVK sample notices for manual testing
 ```

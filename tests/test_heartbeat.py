@@ -6,7 +6,7 @@ import time
 import pytest
 from astropy.time import Time, TimeDelta
 
-from decam_chatterbox.heartbeat import Heartbeat, ServiceStatus, post_shutdown
+from decam_chatterbox.heartbeat import Heartbeat, ServiceStatus, post_shutdown, post_startup
 from decam_chatterbox.slackbot.client import SlackPoster
 
 
@@ -96,3 +96,69 @@ def test_post_shutdown_writes_an_offline_payload(config):
 
 def test_post_shutdown_with_no_poster_does_not_raise(config):
     post_shutdown(_status(), config, None)
+
+
+class _ChannelNotFoundError(Exception):
+    """Shaped like slack_sdk's SlackApiError: the code is on `.response`."""
+
+    def __init__(self):
+        super().__init__("The request to the Slack API failed.")
+        self.response = {"ok": False, "error": "channel_not_found"}
+
+
+class _RecordingPoster:
+    """Fails for chosen channels, records every post."""
+
+    def __init__(self, failing=()):
+        self.failing = set(failing)
+        self.posts = []
+
+    def post(self, blocks, text, channel=None, **kwargs):
+        self.posts.append({"channel": channel, "blocks": blocks, "text": text, **kwargs})
+        if channel in self.failing:
+            raise _ChannelNotFoundError()
+
+
+def test_status_post_falls_back_to_the_main_channel_with_the_reason(config):
+    config.slack.channel = "#main"
+    config.slack.heartbeat_channel = "#private-status"
+    poster = _RecordingPoster(failing={"#private-status"})
+
+    Heartbeat(config, poster, _status())._post()
+
+    assert [p["channel"] for p in poster.posts] == ["#private-status", None]
+    fallback = poster.posts[-1]
+    assert "channel_not_found" in fallback["text"]
+    assert "#private-status" in fallback["blocks"][-1]["elements"][0]["text"]
+    assert "invite" in fallback["blocks"][-1]["elements"][0]["text"]
+
+
+def test_status_post_does_not_retry_when_there_is_no_separate_channel(config):
+    config.slack.heartbeat_channel = ""
+    poster = _RecordingPoster(failing={None})
+    with pytest.raises(_ChannelNotFoundError):
+        Heartbeat(config, poster, _status())._post()
+    assert len(poster.posts) == 1
+
+
+def test_shutdown_notice_also_falls_back_to_the_main_channel(config):
+    config.slack.channel = "#main"
+    config.slack.heartbeat_channel = "#private-status"
+    poster = _RecordingPoster(failing={"#private-status"})
+
+    post_shutdown(_status(), config, poster)
+
+    assert len(poster.posts) == 2
+    assert "shutting down" in poster.posts[-1]["text"].lower()
+
+
+def test_post_startup_reports_the_origin_and_never_raises(config):
+    poster = SlackPoster(config)
+    post_startup(_status(origin="scimma test"), config, poster)
+    payload = json.loads((poster.output_dir / "startup.json").read_text())
+    assert "started" in payload["text"]
+    assert "scimma test" in payload["text"]
+
+    config.slack.heartbeat_channel = ""
+    post_startup(_status(), config, _RecordingPoster(failing={None}))  # both fail: still no raise
+    post_startup(_status(), config, None)

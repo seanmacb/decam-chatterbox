@@ -13,6 +13,8 @@ from ..models import Localization
 __all__ = [
     "use_headless_backend",
     "PROJECTION",
+    "ALLSKY_CENTER_RA_DEG",
+    "ALLSKY_CENTER",
     "GALACTIC_BUFFER_DEG",
     "add_galactic_plane",
     "localization_levels",
@@ -26,6 +28,11 @@ logger = logging.getLogger(__name__)
 
 #: Default all-sky projection.
 PROJECTION = "astro degrees mollweide"
+
+#: RA at the middle of the all-sky map. ligo.skymap's own default puts RA 180
+#: there; 270 puts the seam at RA 90 instead.
+ALLSKY_CENTER_RA_DEG = 270.0
+ALLSKY_CENTER = f"{ALLSKY_CENTER_RA_DEG:g}d 0d"
 
 #: Half-width of the shaded Galactic plane region, degrees.
 GALACTIC_BUFFER_DEG = 10.0
@@ -47,7 +54,9 @@ def use_headless_backend() -> None:
     _backend_set = True
 
 
-def add_galactic_plane(ax, buffer_deg: float = GALACTIC_BUFFER_DEG) -> None:
+def add_galactic_plane(
+    ax, buffer_deg: float = GALACTIC_BUFFER_DEG, center_ra_deg: float = ALLSKY_CENTER_RA_DEG
+) -> None:
     """Overlay the Galactic plane and a +/- buffer in Galactic latitude.
 
     Parameters
@@ -56,6 +65,9 @@ def add_galactic_plane(ax, buffer_deg: float = GALACTIC_BUFFER_DEG) -> None:
         A ``ligo.skymap`` WCS axes.
     buffer_deg : `float`
         Latitude offset for the dashed limits.
+    center_ra_deg : `float`
+        RA at the middle of the map. The lines are broken where they cross
+        the opposite edge, which is the seam of the projection.
     """
     from astropy.coordinates import SkyCoord
 
@@ -78,9 +90,12 @@ def add_galactic_plane(ax, buffer_deg: float = GALACTIC_BUFFER_DEG) -> None:
         coords = SkyCoord(l=ell, b=np.full_like(ell, b), unit="deg", frame="galactic").icrs
         ra = coords.ra.deg
         dec = coords.dec.deg
-        # Break the line where it wraps in RA so the projection does not draw
-        # a horizontal streak across the whole map.
-        jumps = np.flatnonzero(np.abs(np.diff(ra)) > 180.0)
+        # Break the line where it crosses the map's edge so the projection
+        # does not draw a horizontal streak across the whole map. RA is
+        # measured from the map centre, which is what puts that edge at
+        # centre +/- 180 rather than at RA 0.
+        offset = (ra - center_ra_deg + 180.0) % 360.0 - 180.0
+        jumps = np.flatnonzero(np.abs(np.diff(offset)) > 180.0)
         segments = np.split(np.arange(ra.size), jumps + 1)
         for n, seg in enumerate(segments):
             if seg.size < 2:
@@ -129,15 +144,15 @@ MAX_ZOOM_RADIUS_DEG = 25.0
 
 
 def localization_extent(localization: Localization) -> tuple[float, float, float]:
-    """Centroid and angular size of a localization's enclosed region.
+    """Centre and angular size of a localization's region, for framing.
 
     Returns
     -------
     ra_deg, dec_deg : `float`
-        Centroid, by vector mean so a region spanning RA 0 does not average
+        Centre, by vector mean so a region spanning RA 0 does not average
         to RA 180.
     radius_deg : `float`
-        Greatest angular distance from that centroid to any region pixel.
+        Greatest angular distance from that centre to any region pixel.
         NaN when the region is empty.
     """
     import healpy as hp
@@ -174,14 +189,14 @@ def sky_projection(localization: Localization, max_zoom_radius_deg: float = MAX_
     projection : `str`
         Projection name for ``plt.subplot``.
     kwargs : `dict`
-        Extra keyword arguments, empty for the all-sky case.
+        Extra keyword arguments (the map centre, for the all-sky case).
     """
     import astropy.units as u
     from astropy.coordinates import SkyCoord
 
     ra, dec, radius = localization_extent(localization)
     if not np.isfinite(radius) or radius > max_zoom_radius_deg:
-        return PROJECTION, {}
+        return PROJECTION, {"center": ALLSKY_CENTER}
     return "astro zoom", {
         "center": SkyCoord(ra * u.deg, dec * u.deg),
         "radius": max(radius * 1.4, 1.0) * u.deg,

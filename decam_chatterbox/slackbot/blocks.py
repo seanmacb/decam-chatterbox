@@ -224,7 +224,7 @@ def _localization_blocks(trigger: Trigger) -> list[dict[str, Any]]:
     lines = [f"*Localization* ({loc.credible_level:.0%} credible region)"]
     lines.append(
         f"Area {_fmt(geo.area_deg2, ',.0f', ' deg^2')}  |  "
-        f"centroid RA {_fmt(geo.centroid_ra_deg, '.2f')}, Dec {_fmt(geo.centroid_dec_deg, '.2f')}"
+        f"most probable position RA {_fmt(geo.peak_ra_deg, '.2f')}, Dec {_fmt(geo.peak_dec_deg, '.2f')}"
     )
     lines.append(
         f"Dec range {_fmt(geo.dec_min_deg, '.1f')} to {_fmt(geo.dec_max_deg, '.1f')} deg  |  "
@@ -280,10 +280,8 @@ def _observability_blocks(
     if events.moonrise is None and events.moonset is None:
         moon_lines.append("_The Moon neither rises nor sets during this night._")
     if trigger.geometry is not None:
-        moon_sep = moon_separation_deg(
-            trigger.geometry.centroid_ra_deg, trigger.geometry.centroid_dec_deg, events
-        )
-        moon_lines.append(f"Separation from localization centroid: {_fmt(moon_sep, '.1f', ' deg')}")
+        moon_sep = moon_separation_deg(trigger.geometry.peak_ra_deg, trigger.geometry.peak_dec_deg, events)
+        moon_lines.append(f"Separation from most probable position: {_fmt(moon_sep, '.1f', ' deg')}")
 
     dark_lines = [
         f"*Accessible dark hours at CTIO* (airmass < {dark_hours.airmass_limit:g}, i.e. altitude > "

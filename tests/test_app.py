@@ -159,3 +159,52 @@ def test_run_service_tolerates_signal_registration_failure(tmp_path, notice, con
     path = tmp_path / "a.json"
     path.write_text(json.dumps(notice))
     assert run_service(config, paths=[path]) == 1
+
+
+def test_run_service_installs_a_sighup_handler_unless_it_was_ignored(tmp_path, notice, config, monkeypatch):
+    path = tmp_path / "a.json"
+    path.write_text(json.dumps(notice))
+
+    calls = []
+    monkeypatch.setattr(signal_module, "signal", lambda *args: calls.append(args))
+    monkeypatch.setattr(signal_module, "getsignal", lambda signum: signal_module.SIG_DFL)
+    run_service(config, paths=[path])
+    assert (signal_module.SIGHUP, signal_module.default_int_handler) in calls
+
+    # nohup: the operator asked for the process to survive a hangup.
+    calls.clear()
+    monkeypatch.setattr(signal_module, "getsignal", lambda signum: signal_module.SIG_IGN)
+    run_service(config, paths=[path])
+    assert (signal_module.SIGHUP, signal_module.default_int_handler) not in calls
+
+
+def test_run_service_ignores_further_stop_signals_while_posting_the_shutdown_notice(
+    tmp_path, notice, config, monkeypatch
+):
+    path = tmp_path / "a.json"
+    path.write_text(json.dumps(notice))
+    monkeypatch.setattr(
+        app_module, "process_notice", lambda *a, **k: (_ for _ in ()).throw(KeyboardInterrupt())
+    )
+
+    seen_during_post = {}
+
+    def fake_post_shutdown(status, config, poster, reason="interrupted"):
+        seen_during_post["sigterm"] = signal_module.getsignal(signal_module.SIGTERM)
+        seen_during_post["sighup"] = signal_module.getsignal(signal_module.SIGHUP)
+
+    monkeypatch.setattr(app_module, "post_shutdown", fake_post_shutdown)
+    before = signal_module.getsignal(signal_module.SIGTERM)
+    run_service(config, paths=[path])
+
+    assert seen_during_post == {"sigterm": signal_module.SIG_IGN, "sighup": signal_module.SIG_IGN}
+    # ... and the process's own handlers are put back afterwards.
+    assert signal_module.getsignal(signal_module.SIGTERM) == before
+
+
+def test_run_service_posts_a_startup_notice(tmp_path, notice, config):
+    path = tmp_path / "a.json"
+    path.write_text(json.dumps(notice))
+    run_service(config, paths=[path])
+    payload = json.loads((config_work_posts_dir(config) / "startup.json").read_text())
+    assert "started" in payload["text"]

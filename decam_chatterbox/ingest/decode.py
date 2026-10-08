@@ -231,7 +231,7 @@ def _attach_localization(
         provenance=f"{trigger.alert_type} notice for {trigger.superevent_id}, nside={nside}",
         credible_level=DEFAULT_CREDIBLE_LEVEL,
     )
-    trigger.geometry = geometry_from_mask(mask, nside)
+    trigger.geometry = geometry_from_mask(mask, nside, prob)
     for key, attr in (("distmean", "distance_mean_mpc"), ("diststd", "distance_std_mpc")):
         value = meta.get(key)
         if value is not None and np.isfinite(value):

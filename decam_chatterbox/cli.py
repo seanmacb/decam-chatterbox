@@ -49,6 +49,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_replay.add_argument("--out-dir", help="Where to write the dark-hours plot")
 
     sub.add_parser("test-post", help="Post a test message to confirm Slack access")
+    p_ping = sub.add_parser(
+        "test-ping",
+        help="Post a clearly-marked test that @-mentions the on-call team (this really notifies them)",
+    )
+    p_ping.add_argument(
+        "--mention",
+        action="append",
+        metavar="ID",
+        help="Mention this Slack ID (e.g. your own U0123ABCD) instead of slack.mention; repeatable",
+    )
+    p_ping.add_argument("--channel", help="Post here instead of slack.urgent_channel (or slack.channel)")
+    p_ping.add_argument("-y", "--yes", action="store_true", help="Do not ask for confirmation")
     sub.add_parser("doctor", help="Report what works, what does not, and how to fix it")
 
     return parser
@@ -149,6 +161,57 @@ def _cmd_test_post(args: argparse.Namespace, config: Config) -> int:
     return 0
 
 
+def _cmd_test_ping(args: argparse.Namespace, config: Config) -> int:
+    from .slackbot.client import SlackPoster
+
+    if args.mention:
+        config.slack.mention = list(args.mention)
+    if not config.slack.mention:
+        print(
+            "Nothing to ping: slack.mention is empty. Set it in config.yaml (e.g. "
+            '["!subteam^S01ABCDEF"] for a user group), or pass --mention with your own Slack ID '
+            "to rehearse.",
+            file=sys.stderr,
+        )
+        return 2
+
+    channel = args.channel or config.slack.urgent_channel or config.slack.channel
+    tags = " ".join(f"<{m}>" for m in config.slack.mention)
+    print(f"This will post to {channel} and notify: {', '.join(config.slack.mention)}")
+    if not args.yes and config.slack_token is not None:
+        if input("Send it? [y/N] ").strip().lower() not in ("y", "yes"):
+            print("Cancelled; nothing was sent.")
+            return 1
+
+    blocks = [
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": ":rotating_light: *decam-chatterbox TEST ping* -- this is only a test of the "
+                "on-call notification path. No action is needed. If you were notified, "
+                "`slack.mention` is working.",
+            },
+        }
+    ]
+    poster = SlackPoster(config)
+    posted = poster.post(
+        blocks,
+        "decam-chatterbox TEST ping (no action needed)",
+        channel=channel,
+        mention=True,
+        label="test_ping",
+    )
+    if posted.offline:
+        print(
+            f"Offline: {config.slack.bot_token_env} is not set, so nothing was sent. "
+            f"Payload ({tags}) written under {poster.output_dir}."
+        )
+        return 1
+    print(f"Posted to {posted.channel} (ts={posted.ts}). Check that {tags} was actually notified.")
+    return 0
+
+
 def _cmd_doctor(args: argparse.Namespace, config: Config) -> int:
     from .doctor import diagnose, format_report
 
@@ -173,6 +236,7 @@ def main(argv: list[str] | None = None) -> int:
         "serve": _cmd_serve,
         "replay": _cmd_replay,
         "test-post": _cmd_test_post,
+        "test-ping": _cmd_test_ping,
         "doctor": _cmd_doctor,
     }
     return handlers[args.command](args, config)

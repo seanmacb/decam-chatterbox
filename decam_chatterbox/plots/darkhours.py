@@ -9,7 +9,14 @@ import numpy as np
 from ..astro.darkhours import DarkHoursMap
 from ..deps import require
 from ..models import Localization
-from .style import PROJECTION, add_galactic_plane, localization_levels, mark_coord, use_headless_backend
+from .style import (
+    ALLSKY_CENTER,
+    PROJECTION,
+    add_galactic_plane,
+    localization_levels,
+    mark_coord,
+    use_headless_backend,
+)
 
 __all__ = ["plot_dark_hours", "region_hours_summary"]
 
@@ -21,7 +28,7 @@ def plot_dark_hours(
     localization: Localization,
     out_path: str | Path,
     title: str | None = None,
-    centroid: tuple[float, float] | None = None,
+    peak: tuple[float, float] | None = None,
     dpi: int = 130,
 ) -> Path:
     """Draw the dark-hours map with the localization contour on top.
@@ -36,8 +43,8 @@ def plot_dark_hours(
         PNG destination.
     title : `str`, optional
         Plot title. A description of the night is generated when omitted.
-    centroid : `tuple` [`float`, `float`], optional
-        RA/Dec in degrees to mark.
+    peak : `tuple` [`float`, `float`], optional
+        RA/Dec in degrees of the most probable position, to mark.
     dpi : `int`
         Output resolution.
 
@@ -57,7 +64,7 @@ def plot_dark_hours(
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     fig = plt.figure(figsize=(11, 6), dpi=dpi)
-    ax = plt.axes(projection=PROJECTION)
+    ax = plt.axes(projection=PROJECTION, center=ALLSKY_CENTER)
 
     # Mask pixels that never reach the airmass limit so they read as "not
     # accessible" rather than as the bottom of the colour scale.
@@ -82,8 +89,8 @@ def plot_dark_hours(
         logger.warning("No contour drawn for %s", out_path.name)
 
     add_galactic_plane(ax)
-    if centroid is not None:
-        mark_coord(ax, centroid[0], centroid[1], label="Localization centroid", color="red")
+    if peak is not None:
+        mark_coord(ax, peak[0], peak[1], label="Most probable position", color="red")
 
     ax.grid(alpha=0.25)
     cbar = fig.colorbar(img, ax=ax, location="bottom", pad=0.06, shrink=0.8, aspect=40)

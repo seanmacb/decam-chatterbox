@@ -34,8 +34,8 @@ def test_decode_populates_localization(notice):
     assert trigger.distance_mean_mpc == pytest.approx(120.0)
     assert trigger.distance_std_mpc == pytest.approx(30.0)
     # The disc was centred at ra=60, dec=-40 in conftest.make_skymap_bytes.
-    assert trigger.geometry.centroid_ra_deg == pytest.approx(60.0, abs=2.0)
-    assert trigger.geometry.centroid_dec_deg == pytest.approx(-40.0, abs=2.0)
+    assert trigger.geometry.peak_ra_deg == pytest.approx(60.0, abs=2.0)
+    assert trigger.geometry.peak_dec_deg == pytest.approx(-40.0, abs=2.0)
 
 
 def test_decode_avro_style_raw_bytes_skymap(notice_avro, notice):

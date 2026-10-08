@@ -128,7 +128,13 @@ class SlackPoster:
         """
         channel = channel or self.channel_for(is_test)
         if mention and self.config.slack.mention:
-            text = " ".join(f"<{m}>" for m in self.config.slack.mention) + f" {text}"
+            tags = " ".join(f"<{m}>" for m in self.config.slack.mention)
+            text = f"{tags} {text}"
+            # Also a visible leading block. `text` is only the notification
+            # fallback once `blocks` are present, and is not rendered in the
+            # channel, so a mention carried there alone is easy to lose: this
+            # is the part that is guaranteed to render and notify.
+            blocks = [{"type": "section", "text": {"type": "mrkdwn", "text": tags}}, *blocks]
 
         if self.offline:
             return self._write_offline(channel, blocks, text, files, label)

@@ -23,7 +23,7 @@ from astropy.time import Time
 from .astro.almanac import NightEvents, night_events
 from .astro.darkhours import DarkHoursMap, dark_hours_map
 from .config import Config
-from .heartbeat import Heartbeat, ServiceStatus, post_shutdown
+from .heartbeat import Heartbeat, ServiceStatus, post_shutdown, post_startup
 from .ingest.decode import decode_notice
 from .ingest.enrich_gracedb import enrich_chirp_mass
 from .models import Trigger
@@ -140,7 +140,7 @@ def process_notice(
                         dark_hours,
                         trigger.localization,
                         out_dir / f"{trigger.superevent_id}_darkhours.png",
-                        centroid=(trigger.geometry.centroid_ra_deg, trigger.geometry.centroid_dec_deg),
+                        peak=(trigger.geometry.peak_ra_deg, trigger.geometry.peak_dec_deg),
                     )
                 )
             except Exception as exc:
@@ -267,14 +267,68 @@ def _describe_source(source: Any, config: Config) -> str:
     return describe() if callable(describe) else config.ingest.kind
 
 
+def _system_stop_signals() -> list[int]:
+    """Signals the system sends to ask a service to stop, where they exist."""
+    return [getattr(signal, name) for name in ("SIGTERM", "SIGHUP") if hasattr(signal, name)]
+
+
+def _install_stop_signal_handlers() -> dict[int, Any]:
+    """Make SIGTERM and SIGHUP behave exactly like Ctrl-C.
+
+    Both then converge on the one shutdown path in `run_service`. SIGTERM is
+    what `kill`, systemd and Docker send; SIGHUP is what a closed ssh/tmux
+    session or a host shutting down sends to a process it started, and its
+    default action kills the process instantly with no chance to say
+    anything. A SIGHUP that was deliberately ignored (``nohup``) is left
+    ignored: the operator asked for the process to survive that.
+
+    Only possible from the main thread; harmless to skip elsewhere, and Ctrl-C
+    still works either way.
+
+    Returns
+    -------
+    previous : `dict` [`int`, `Any`]
+        Handlers that were replaced, for `_restore_signal_handlers`.
+    """
+    previous: dict[int, Any] = {}
+    for signum in _system_stop_signals():
+        try:
+            before = signal.getsignal(signum)
+            if signum == getattr(signal, "SIGHUP", None) and before == signal.SIG_IGN:
+                continue
+            signal.signal(signum, signal.default_int_handler)
+            previous[signum] = before
+        except ValueError:
+            logger.debug("Could not install a handler for signal %s (not the main thread)", signum)
+            break
+    return previous
+
+
+def _restore_signal_handlers(previous: dict[int, Any]) -> None:
+    for signum, handler in previous.items():
+        try:
+            signal.signal(signum, handler if handler is not None else signal.SIG_DFL)
+        except ValueError:
+            return
+
+
+def _ignore_system_stop_signals() -> None:
+    for signum in _system_stop_signals():
+        try:
+            signal.signal(signum, signal.SIG_IGN)
+        except ValueError:
+            return
+
+
 def run_service(config: Config, paths=None) -> int:
     """Consume the configured source and post about every notice.
 
-    Runs until interrupted (Ctrl-C or SIGTERM, which is installed to behave
-    like Ctrl-C for the duration of this call) or until the source raises. A
-    heartbeat posts every ``heartbeat.interval_s`` on its own thread so a hang
-    or a silently-dead broker connection is visible even between alerts, and
-    a deliberate stop posts its own notice rather than just going quiet.
+    Runs until interrupted (Ctrl-C, or SIGTERM/SIGHUP, which are installed to
+    behave like Ctrl-C for the duration of this call) or until the source
+    raises. A heartbeat posts every ``heartbeat.interval_s`` on its own
+    thread so a hang or a silently-dead broker connection is visible even
+    between alerts, and a deliberate stop posts its own notice rather than
+    just going quiet.
 
     Parameters
     ----------
@@ -290,21 +344,14 @@ def run_service(config: Config, paths=None) -> int:
     """
     from .ingest.source import make_source
 
-    try:
-        # Makes `kill` (and a systemd/Docker stop, which sends SIGTERM by
-        # default) raise KeyboardInterrupt exactly as Ctrl-C does, so both
-        # converge on the one shutdown path below. Only possible from the
-        # main thread; harmless to skip elsewhere; Ctrl-C still works either
-        # way.
-        signal.signal(signal.SIGTERM, signal.default_int_handler)
-    except ValueError:
-        logger.debug("Could not install a SIGTERM handler (not the main thread)")
+    previous_handlers = _install_stop_signal_handlers()
 
     source = make_source(config, paths=paths)
     poster = SlackPoster(config)
     status = ServiceStatus(started_at=Time.now(), origin=_describe_source(source, config))
     heartbeat = Heartbeat(config, poster, status)
     heartbeat.start()
+    post_startup(status, config, poster)
 
     handled = 0
     try:
@@ -333,6 +380,11 @@ def run_service(config: Config, paths=None) -> int:
                 # stream on it would stall every later alert.
                 source.mark_done(metadata)
     except KeyboardInterrupt:
+        # A host going down sends SIGHUP and/or SIGTERM in quick succession;
+        # a second one arriving mid-post would raise out of the Slack call
+        # and lose the very message this exists to send. Ctrl-C is left
+        # alone, as the way to abandon a post that is hanging.
+        _ignore_system_stop_signals()
         post_shutdown(status, config, poster, reason="interrupted")
     except Exception as exc:
         # The stream itself failed -- the broker dropped us, credentials
@@ -348,4 +400,5 @@ def run_service(config: Config, paths=None) -> int:
     finally:
         heartbeat.stop()
         source.close()
+        _restore_signal_handlers(previous_handlers)
     return handled

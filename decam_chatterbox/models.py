@@ -54,13 +54,19 @@ class Localization:
 
 @dataclass
 class Geometry:
-    """Sky geometry of a credible region. All angles are in degrees."""
+    """Sky geometry of a credible region. All angles are in degrees.
+
+    ``peak_ra_deg``/``peak_dec_deg`` is the single most probable position in
+    the localization (see `decam_chatterbox.astro.skymap.peak_position`), not
+    the mean of the region: a banana-shaped or multi-lobed map has a mean that
+    can sit on sky the localization gives almost no probability to.
+    """
 
     area_deg2: float
     dec_min_deg: float
     dec_max_deg: float
-    centroid_ra_deg: float
-    centroid_dec_deg: float
+    peak_ra_deg: float
+    peak_dec_deg: float
     gal_b_abs_min_deg: float
     gal_b_abs_max_deg: float
     n_pixels: int
