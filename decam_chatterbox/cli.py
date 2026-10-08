@@ -18,6 +18,7 @@ Subcommands
 import argparse
 import logging
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .config import Config, load_config
@@ -162,17 +163,21 @@ def _cmd_test_post(args: argparse.Namespace, config: Config) -> int:
 
 
 def _cmd_test_ping(args: argparse.Namespace, config: Config) -> int:
-    from .slackbot.client import SlackPoster
+    from .slackbot.client import SlackPoster, normalize_mention
 
-    if args.mention:
-        config.slack.mention = list(args.mention)
-    if not config.slack.mention:
+    entries = list(args.mention) if args.mention else list(config.slack.mention)
+    if not entries:
         print(
             "Nothing to ping: slack.mention is empty. Set it in config.yaml (e.g. "
-            '["!subteam^S01ABCDEF"] for a user group), or pass --mention with your own Slack ID '
+            '["S01ABCDEF"] for a user group), or pass --mention with your own Slack ID '
             "to rehearse.",
             file=sys.stderr,
         )
+        return 2
+    try:
+        config.slack.mention = [normalize_mention(entry) for entry in entries]
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
         return 2
 
     channel = args.channel or config.slack.urgent_channel or config.slack.channel
@@ -183,21 +188,27 @@ def _cmd_test_ping(args: argparse.Namespace, config: Config) -> int:
             print("Cancelled; nothing was sent.")
             return 1
 
+    sent_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     blocks = [
+        {"type": "divider"},
         {
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": ":rotating_light: *decam-chatterbox TEST ping* -- this is only a test of the "
-                "on-call notification path. No action is needed. If you were notified, "
-                "`slack.mention` is working.",
+                "text": ":rotating_light: *TEST: decam-chatterbox on-call ping*\n"
+                "This only checks that the on-call notification works. *No action is needed.* "
+                "If you were notified, `slack.mention` is set up correctly.",
             },
-        }
+        },
+        {
+            "type": "context",
+            "elements": [{"type": "mrkdwn", "text": f"Sent by `decam-chatterbox test-ping` at {sent_at}"}],
+        },
     ]
     poster = SlackPoster(config)
     posted = poster.post(
         blocks,
-        "decam-chatterbox TEST ping (no action needed)",
+        "TEST: decam-chatterbox on-call ping (no action needed)",
         channel=channel,
         mention=True,
         label="test_ping",

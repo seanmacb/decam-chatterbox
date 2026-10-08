@@ -31,7 +31,8 @@ slack:
   heartbeat_channel: ""
   username: decam-chatterbox
   icon_emoji: ":ocean:"
-  # Slack IDs to @-mention, e.g. ["!subteam^S01ABCDEF"]. Included only on the
+  # Slack IDs to @-mention: a user group ("S01ABCDEF"), a user ("U01ABCDEF"),
+  # "!here" or "!channel". Check with `test-ping`. Included only on the
   # urgent_channel cross-post of a high-priority real alert -- see `priority`
   # below -- not on every post, so people are not paged for a routine BBH
   # detection.

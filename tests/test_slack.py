@@ -2,7 +2,9 @@
 
 import json
 
-from decam_chatterbox.slackbot.client import SlackPoster, render_blocks_as_text
+import pytest
+
+from decam_chatterbox.slackbot.client import SlackPoster, normalize_mention, render_blocks_as_text
 
 
 def test_poster_is_offline_without_a_token(config):
@@ -91,3 +93,37 @@ def test_render_blocks_as_text_covers_every_block_type():
     assert "body" in text
     assert "footer" in text
     assert "-" * 10 in text
+
+
+@pytest.mark.parametrize(
+    "given, expected",
+    [
+        ("S0C4J7UE4NB", "!subteam^S0C4J7UE4NB"),
+        ("!subteam^S0C4J7UE4NB", "!subteam^S0C4J7UE4NB"),
+        ("<!subteam^S0C4J7UE4NB>", "!subteam^S0C4J7UE4NB"),
+        ("<!subteam^S0C4J7UE4NB|@decam-ir1-team>", "!subteam^S0C4J7UE4NB|@decam-ir1-team"),
+        ("@decam-ir1-team^S0C4J7UE4NB", "!subteam^S0C4J7UE4NB"),
+        ("U0123ABCD", "@U0123ABCD"),
+        ("@U0123ABCD", "@U0123ABCD"),
+        ("W0123ABCD", "@W0123ABCD"),
+        ("!here", "!here"),
+        ("<!channel>", "!channel"),
+    ],
+)
+def test_normalize_mention_accepts_the_forms_people_have_to_hand(given, expected):
+    assert normalize_mention(given) == expected
+
+
+@pytest.mark.parametrize("bad", ["@decam-ir1-team", "decam-ir1-team", "", "!subteam", "!everybody"])
+def test_normalize_mention_rejects_what_slack_would_show_as_dead_text(bad):
+    with pytest.raises(ValueError):
+        normalize_mention(bad)
+
+
+def test_post_renders_a_normalized_mention_and_skips_an_invalid_one(config):
+    config.slack.mention = ["@decam-ir1-team^S0C4J7UE4NB", "@just-a-name"]
+    poster = SlackPoster(config)
+    poster.post([], "hello", mention=True, label="normalized")
+    payload = json.loads((poster.output_dir / "normalized.json").read_text())
+    assert payload["blocks"][0]["text"]["text"] == ":bell: *On-call:* <!subteam^S0C4J7UE4NB>"
+    assert payload["text"] == "<!subteam^S0C4J7UE4NB> hello"

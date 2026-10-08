@@ -133,7 +133,10 @@ python -m decam_chatterbox.cli test-ping --mention U0123ABCD --channel "#my-test
 ```
 
 Find a user ID under *Profile -> three dots -> Copy member ID*, and a user
-group's under *People -> User groups* (`!subteam^S...`). The mention is also
+group's ID under *People -> User groups*. `slack.mention` and `--mention` accept
+the bare ID (`S0123ABCD` or `U0123ABCD`), `!subteam^S0123ABCD`, `!here` or
+`!channel`, and the `@name^S0123ABCD` form a copied group link can produce.
+A bare `@name` is rejected, since Slack only renders IDs. The mention is also
 rendered as a visible first block, not just carried in the notification text.
 
 Set `priority.enabled: false` to turn the whole feature off -- no badge, no

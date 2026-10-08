@@ -9,15 +9,63 @@ without Slack.
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from ..config import Config
 
-__all__ = ["SlackPoster", "PostedMessage", "render_blocks_as_text"]
+__all__ = ["SlackPoster", "PostedMessage", "render_blocks_as_text", "normalize_mention"]
 
 logger = logging.getLogger(__name__)
+
+
+_SPECIAL_MENTIONS = ("here", "channel", "everyone")
+
+
+def normalize_mention(value: str) -> str:
+    """The Slack mention token for a user, user group or broadcast.
+
+    Slack renders a mention only in exactly the right form -- ``@U0123ABCD``
+    for a user, ``!subteam^S0123ABCD`` for a user group, ``!here`` -- and
+    shows anything else as literal text. This accepts the forms people
+    actually have to hand: the bare ID, the token with or without its angle
+    brackets, and the ``@handle^ID`` string a copied group link can produce.
+
+    Parameters
+    ----------
+    value : `str`
+        A Slack ID or mention token.
+
+    Returns
+    -------
+    token : `str`
+        The token to wrap in ``<...>``.
+
+    Raises
+    ------
+    ValueError
+        If `value` is not recognisably an ID or a mention. A bare ``@name``
+        cannot be resolved without a Slack lookup, so it is rejected rather
+        than posted as dead text.
+    """
+    token = value.strip().strip("<>").strip()
+    if token.startswith("!"):
+        base = token[1:].split("|")[0]
+        if base in _SPECIAL_MENTIONS or re.fullmatch(r"subteam\^S[A-Z0-9]+", base):
+            return token
+    elif token.startswith("@"):
+        # "@decam-ir1-team^S0123ABCD": keep only the ID after the caret.
+        token = token[1:].rsplit("^", 1)[-1] if "^" in token else token[1:]
+    if re.fullmatch(r"S[A-Z0-9]{6,}", token):
+        return f"!subteam^{token}"
+    if re.fullmatch(r"[UW][A-Z0-9]{6,}", token):
+        return f"@{token}"
+    raise ValueError(
+        f"Cannot make a Slack mention from {value!r}. Use a user ID (U0123ABCD), a user group ID "
+        "(S0123ABCD or !subteam^S0123ABCD), or !here / !channel."
+    )
 
 
 @dataclass
@@ -87,6 +135,18 @@ class SlackPoster:
             return self.config.slack.test_channel
         return self.config.slack.channel
 
+    def _mention_tags(self) -> str:
+        """``slack.mention`` as renderable ``<...>`` tokens. An entry that is
+        not a valid mention is logged and skipped, not allowed to fail the
+        post it was meant to enrich."""
+        tags = []
+        for entry in self.config.slack.mention:
+            try:
+                tags.append(f"<{normalize_mention(entry)}>")
+            except ValueError as exc:
+                logger.error("Ignoring slack.mention entry: %s", exc)
+        return " ".join(tags)
+
     # ------------------------------------------------------------------ post
 
     def post(
@@ -127,14 +187,17 @@ class SlackPoster:
         posted : `PostedMessage`
         """
         channel = channel or self.channel_for(is_test)
-        if mention and self.config.slack.mention:
-            tags = " ".join(f"<{m}>" for m in self.config.slack.mention)
+        tags = self._mention_tags() if mention else ""
+        if tags:
             text = f"{tags} {text}"
             # Also a visible leading block. `text` is only the notification
             # fallback once `blocks` are present, and is not rendered in the
             # channel, so a mention carried there alone is easy to lose: this
             # is the part that is guaranteed to render and notify.
-            blocks = [{"type": "section", "text": {"type": "mrkdwn", "text": tags}}, *blocks]
+            blocks = [
+                {"type": "section", "text": {"type": "mrkdwn", "text": f":bell: *On-call:* {tags}"}},
+                *blocks,
+            ]
 
         if self.offline:
             return self._write_offline(channel, blocks, text, files, label)

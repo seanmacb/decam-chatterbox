@@ -79,7 +79,8 @@ def test_test_ping_offline_writes_a_payload_that_mentions_the_team(tmp_path, mon
     assert payload["channel"] == "#urgent"
     assert "!subteam^S123" in payload["text"]
     assert "!subteam^S123" in payload["blocks"][0]["text"]["text"]
-    assert "TEST" in payload["blocks"][1]["text"]["text"]
+    assert payload["blocks"][0]["text"]["text"].startswith(":bell: *On-call:*")
+    assert "TEST" in payload["blocks"][2]["text"]["text"]
 
 
 def test_test_ping_asks_before_notifying_and_can_be_cancelled(tmp_path, monkeypatch, capsys):
@@ -102,9 +103,31 @@ def test_test_ping_override_mention_and_channel(tmp_path, monkeypatch, capsys):
 
     monkeypatch.setattr("decam_chatterbox.slackbot.client.SlackPoster.post", fake_post)
     rc = main(
-        ["-c", str(_ping_config(tmp_path)), "test-ping", "--yes", "--mention", "U0ME", "--channel", "#me"]
+        [
+            "-c",
+            str(_ping_config(tmp_path)),
+            "test-ping",
+            "--yes",
+            "--mention",
+            "U0123ABCD",
+            "--channel",
+            "#me",
+        ]
     )
     assert rc == 0
     assert sent["channel"] == "#me"
     assert sent["mention"] is True
-    assert sent["mention_list"] == ["U0ME"]
+    assert sent["mention_list"] == ["@U0123ABCD"]
+
+
+def test_test_ping_normalizes_a_pasted_group_mention(tmp_path, monkeypatch, capsys):
+    monkeypatch.delenv("SLACK_BOT_TOKEN", raising=False)
+    main(["-c", str(_ping_config(tmp_path)), "test-ping", "--mention", "@decam-ir1-team^S0C4J7UE4NB"])
+    payload = json.loads((tmp_path / "work" / "posts" / "test_ping.json").read_text())
+    assert payload["text"].startswith("<!subteam^S0C4J7UE4NB> ")
+
+
+def test_test_ping_rejects_an_unresolvable_handle(tmp_path, capsys):
+    rc = main(["-c", str(_ping_config(tmp_path)), "test-ping", "--yes", "--mention", "@some-team"])
+    assert rc == 2
+    assert "Cannot make a Slack mention" in capsys.readouterr().err
