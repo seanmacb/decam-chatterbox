@@ -21,6 +21,8 @@ from ..priority import PriorityAssessment
 
 __all__ = [
     "build_trigger_blocks",
+    "crew_blocks",
+    "crew_applies",
     "build_failure_blocks",
     "plain_text_summary",
     "MAX_SECTION_CHARS",
@@ -140,6 +142,137 @@ def _header_blocks(trigger: Trigger, priority: PriorityAssessment | None) -> lis
     ]
     if priority is not None and priority.reasons:
         blocks.append(_context("*Priority triage:* " + "; ".join(priority.reasons)))
+    return blocks
+
+
+# ----------------------------------------------------------------------- crew
+
+
+def _mention(handle: str, ids: dict[str, str]) -> str:
+    """A Slack mention of a user group, which only pings when it has an ID.
+
+    ``@handle`` typed as text is displayed but notifies nobody, so a group
+    whose ID is unknown renders as that plain text and `crew_blocks` says so.
+    """
+    group_id = ids.get(handle, "")
+    return f"<!subteam^{group_id}>" if group_id else f"@{handle}"
+
+
+def crew_applies(trigger: Trigger, config: Config, priority: PriorityAssessment | None) -> bool:
+    """Whether this alert is one the crew would be tagged on.
+
+    True for a real, non-retracted alert -- high priority, unless
+    ``slack.crew.only_high_priority`` is off -- with a crew configured. Age is
+    left to `crew_blocks`, which says so in the post rather than staying
+    silent. Lets the caller skip a Slack lookup that would not be used.
+    """
+    crew = config.slack.crew
+    if not crew.enabled or not crew.handles():
+        return False
+    if trigger.is_retraction or not trigger.is_real:
+        return False
+    if crew.only_high_priority and (priority is None or not priority.is_high_priority):
+        return False
+    return True
+
+
+def crew_blocks(
+    trigger: Trigger,
+    config: Config,
+    ids: dict[str, str] | None = None,
+    priority: PriorityAssessment | None = None,
+) -> list[dict[str, Any]]:
+    """Tell the people on shift that they have a job to do.
+
+    The lead is named as the decision-maker; the other groups are told to be
+    aware, contact the lead as soon as possible, and wait for instructions
+    rather than act on their own.
+
+    Parameters
+    ----------
+    trigger : `Trigger`
+        The alert, for whether it is real and its age.
+    config : `Config`
+        Configuration naming the groups; see
+        `decam_chatterbox.config.CrewConfig`.
+    ids : `dict` [`str`, `str`], optional
+        User group IDs by handle, from `SlackPoster.crew_ids`. A group missing
+        from it is written as plain text, which does not notify anyone, and
+        the post says so. None means the IDs could not be looked up at all --
+        a dry run -- and is rendered without that warning, which would
+        otherwise be a claim about a post that was never sent.
+    priority : `PriorityAssessment`, optional
+        With ``slack.crew.only_high_priority`` (the default), the crew is
+        tagged only when this says the alert is high priority.
+
+    Returns
+    -------
+    blocks : `list` [`dict`]
+        Empty when there is no crew configured, for a retraction, and -- by
+        default -- for an alert that is not high priority, so a routine
+        detection does not carry a line about the shift at all. When the crew
+        is deliberately *not* tagged on an alert that might otherwise look
+        like it should have been -- not a real superevent, or an event too old
+        to act on -- a single context line says so, so the absence cannot be
+        mistaken for the feature being broken.
+    """
+    crew = config.slack.crew
+    handles = crew.handles()
+    if not crew.enabled or not handles or trigger.is_retraction:
+        return []
+
+    looked_up = ids is not None
+    ids = {**crew.ids, **(ids or {})}
+    lead = crew.lead.strip().lstrip("@")
+    notify = [h for h in (n.strip().lstrip("@") for n in crew.notify) if h and h != lead]
+    names = ", ".join(f"@{h}" for h in handles)
+
+    if not trigger.is_real:
+        which = "a real high-priority one" if crew.only_high_priority else "a real one"
+        return [
+            _context(
+                f":test_tube: Not a real superevent, so the shift was not tagged ({which} tags {names})."
+            )
+        ]
+
+    if crew.only_high_priority and (priority is None or not priority.is_high_priority):
+        return []
+
+    age_s = trigger.age_s
+    if crew.max_age_hours > 0 and age_s is not None and age_s > crew.max_age_hours * 3600.0:
+        return [
+            _context(
+                f":hourglass: The event is {_duration(age_s)} old, so the shift was not tagged "
+                f"(`slack.crew.max_age_hours` is {crew.max_age_hours:g})."
+            )
+        ]
+
+    role = crew.lead_role.strip() or "ToO lead"
+    lines = []
+    if lead:
+        lines.append(
+            f":rotating_light: {_mention(lead, ids)} -- you are the {role} on shift for this event, "
+            "and you have the authority to make decisions about it."
+        )
+    if notify:
+        contact = f"your {role}" if lead else "the team"
+        lines.append(
+            f"{' '.join(_mention(h, ids) for h in notify)} -- please be aware of this event. Get in "
+            f"contact with {contact} as soon as possible, and await further instructions from them."
+        )
+
+    blocks = [_section("\n".join(lines))]
+    unresolved = [h for h in handles if not ids.get(h)]
+    if unresolved and looked_up:
+        # Loud, because a post that looks tagged and notifies nobody is worse
+        # than one that is plainly untagged.
+        blocks.append(
+            _context(
+                ":warning: Not notified: no Slack user group ID for "
+                + ", ".join(f"@{h}" for h in unresolved)
+                + ". Set `slack.crew.ids` or give the bot the `usergroups:read` scope."
+            )
+        )
     return blocks
 
 
@@ -327,6 +460,7 @@ def build_trigger_blocks(
     dark_stats: dict[str, float] | None,
     config: Config,
     priority: PriorityAssessment | None = None,
+    crew_ids: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """Build the Block Kit payload for a notice.
 
@@ -342,11 +476,14 @@ def build_trigger_blocks(
         Output of `decam_chatterbox.plots.darkhours.region_hours_summary`,
         when a localization was available.
     config : `Config`
-        Configuration, for links.
+        Configuration, for links and the shift crew.
     priority : `PriorityAssessment`, optional
         Output of `decam_chatterbox.priority.assess_priority`. Adds a
         high-priority badge to the header and a "why" line beneath it when
-        given; omitted entirely when None.
+        given; omitted entirely when None. Also decides whether the shift
+        crew is tagged; see `crew_blocks`.
+    crew_ids : `dict` [`str`, `str`], optional
+        Slack user group IDs by handle; see `crew_blocks`.
 
     Returns
     -------
@@ -354,6 +491,9 @@ def build_trigger_blocks(
     """
     blocks: list[dict[str, Any]] = []
     blocks += _header_blocks(trigger, priority)
+    # Straight after the header: this is the part of the post somebody has to
+    # act on, and it should not be below the fold on a phone.
+    blocks += crew_blocks(trigger, config, crew_ids, priority)
     blocks.append(_divider())
 
     if trigger.is_retraction:

@@ -12,7 +12,8 @@ site: ctio
 slack:
   # The bot token must be in this environment variable. A bot token is
   # required rather than an incoming webhook, because webhooks cannot upload
-  # the dark-hours plot. Scopes needed: chat:write, files:write.
+  # the dark-hours plot. Scopes needed: chat:write, files:write, and
+  # usergroups:read to tag the shift crew by handle (see `crew` below).
   bot_token_env: SLACK_BOT_TOKEN
   channel: "#decam-gw-alerts"
   # Where notices that are not a real superevent go (the hourly mock/MDC
@@ -37,6 +38,33 @@ slack:
   # below -- not on every post, so people are not paged for a routine BBH
   # detection.
   mention: []
+
+  # The shift crew a high-priority alert tells to act, tagged in the message
+  # itself straight under the header. Slack *user group* handles (without
+  # the @), so they follow the rota. Nobody is tagged until `lead` or
+  # `notify` is set; alerts that are not a real superevent never tag anyone.
+  crew:
+    enabled: true
+    # Holds decision authority for the event, e.g. decam-too-lead.
+    lead: ""
+    # What the lead is called in the message.
+    lead_role: "ToO lead"
+    # Told to be aware, contact the lead as soon as possible, and wait,
+    # e.g. [decam-observers, decam-night-support].
+    notify: []
+    # A mention only notifies when written with the group's ID, so IDs are
+    # looked up from the handles with usergroups.list (scope:
+    # usergroups:read). Fill this in to skip the lookup, or if the bot does
+    # not have that scope:
+    #   ids: {decam-too-lead: S0123ABCD, decam-observers: S0123ABCE}
+    ids: {}
+    # Do not tag for an event older than this, so replaying an archived
+    # alert does not tell the shift a long-gone event needs a decision.
+    # 0 = always.
+    max_age_hours: 24
+    # Tag only on a high-priority alert (see `priority` below), the same rule
+    # `mention` follows. false tags on every real alert.
+    only_high_priority: true
 
 ingest:
   # scimma: subscribe to igwn.gwalert on SCIMMA's Hopskotch broker (the

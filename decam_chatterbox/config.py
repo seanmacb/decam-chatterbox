@@ -16,6 +16,7 @@ import yaml
 __all__ = [
     "Config",
     "SlackConfig",
+    "CrewConfig",
     "IngestConfig",
     "DarkHoursConfig",
     "EnrichConfig",
@@ -33,6 +34,61 @@ DEFAULT_CONFIG_PATHS = (
     Path("config.yaml"),
     Path("~/.config/decam-chatterbox/config.yaml").expanduser(),
 )
+
+
+@dataclass
+class CrewConfig:
+    """Who a high-priority alert tells to act, as distinct from who it pings.
+
+    `SlackConfig.mention` pages someone; this says what they are for. The
+    post names the people on shift who have a job to do, and roles differ:
+    the lead has the authority to make decisions about the event, and the
+    other groups are told to be aware, get in contact with the lead, and wait
+    for instructions rather than act on their own. The groups are Slack *user
+    groups*, which follow the rota, so nobody is named personally and the
+    configuration does not go stale when the shift changes.
+
+    Inert until configured: `lead` and `notify` are empty by default, since
+    which user groups exist is a property of the workspace, not of this tool.
+
+    Notes
+    -----
+    A mention only notifies when it is written with the group's **ID**
+    (``<!subteam^S0123>``). The handle alone is just text, so the poster looks
+    IDs up from the handles with ``usergroups.list`` (scope
+    ``usergroups:read``) unless `ids` supplies them, and says so loudly when it
+    cannot.
+    """
+
+    #: Tag the crew. Alerts that are not a real superevent are never tagged.
+    enabled: bool = True
+    #: User group handle (without the ``@``) that holds decision authority.
+    lead: str = ""
+    #: What the lead is called in the message.
+    lead_role: str = "ToO lead"
+    #: User group handles told to be aware, contact the lead, and wait.
+    notify: list[str] = field(default_factory=list)
+    #: ``{handle: "S0123ABCD"}``. Skips the lookup, which is also the only way
+    #: to tag when the bot token lacks ``usergroups:read``.
+    ids: dict[str, str] = field(default_factory=dict)
+    #: Do not tag for an event older than this many hours when the bot sees
+    #: it. A replay of an archived alert, or a Kafka consumer catching up
+    #: after a restart, would otherwise tell the shift that a long-gone event
+    #: needs a decision. ``0`` tags regardless of age.
+    max_age_hours: float = 24.0
+    #: Tag only for an alert `PriorityConfig` flags as high priority -- the
+    #: same rule `SlackConfig.mention` follows -- so a routine BBH detection
+    #: does not call anybody to action. False tags on every real alert.
+    only_high_priority: bool = True
+
+    def handles(self) -> list[str]:
+        """Every group the post mentions, lead first, without duplicates."""
+        seen: list[str] = []
+        for handle in [self.lead, *self.notify]:
+            handle = handle.strip().lstrip("@")
+            if handle and handle not in seen:
+                seen.append(handle)
+        return seen
 
 
 @dataclass
@@ -65,6 +121,8 @@ class SlackConfig:
     #: `PriorityConfig` -- not on every post, so the people it pages are not
     #: paged for a routine BBH detection.
     mention: list[str] = field(default_factory=list)
+    #: The shift crew a high-priority alert tells to act; see `CrewConfig`.
+    crew: CrewConfig = field(default_factory=CrewConfig)
 
 
 @dataclass
