@@ -106,6 +106,47 @@ def _slack_token_check(config: Config) -> Check:
     )
 
 
+def _slack_crew_check(config: Config) -> Check:
+    """Can every group the post tags be turned into a notifying mention?
+
+    The one failure here is silent in Slack itself: a mention written from a
+    handle looks tagged and notifies nobody. Checking before an alert arrives
+    is the only way anyone finds out in time.
+    """
+    from .slackbot.client import SlackPoster
+
+    crew = config.slack.crew
+    if not crew.enabled:
+        return Check(name="shift crew tags", ok=True, detail="slack.crew.enabled is false; nobody is tagged")
+    handles = crew.handles()
+    if not handles:
+        return Check(
+            name="shift crew tags",
+            ok=True,
+            detail="nobody configured (slack.crew.lead and slack.crew.notify are empty)",
+        )
+    names = ", ".join(f"@{h}" for h in handles)
+    ids = SlackPoster(config).crew_ids()
+    if ids is None:
+        return Check(
+            name="shift crew tags",
+            ok=False,
+            detail=f"cannot look up {names} without a Slack token",
+            fix="Set the bot token, or give every group's ID in slack.crew.ids",
+            notes=["Without it: the post names the crew in plain text and notifies nobody."],
+        )
+    missing = [h for h in handles if h not in ids]
+    if missing:
+        return Check(
+            name="shift crew tags",
+            ok=False,
+            detail="no user group ID for " + ", ".join(f"@{h}" for h in missing),
+            fix="Check the handle, add the bot's usergroups:read scope, or set slack.crew.ids",
+            notes=["Without it: those groups are named in the post but not notified."],
+        )
+    return Check(name="shift crew tags", ok=True, detail=f"{names} resolve to user group IDs")
+
+
 def _hop_auth_check(config: Config) -> Check:
     """Does hop-client have credentials configured for SCIMMA?"""
     from pathlib import Path
@@ -140,6 +181,7 @@ def diagnose(config: Config) -> list[Check]:
     checks.append(_ctio_site_check())
     checks.append(_hop_auth_check(config))
     checks.append(_slack_token_check(config))
+    checks.append(_slack_crew_check(config))
     return checks
 
 

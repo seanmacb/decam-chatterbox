@@ -48,6 +48,11 @@ the dark-hours plot):
   alert still reaches `slack.channel` -- it only adds the badge, gates
   `slack.mention`, and controls an additional cross-post to
   `slack.urgent_channel`. See [Priority triage](#priority-triage).
+- **Who on shift has to act**, straight under the header of a high-priority
+  alert, once `slack.crew` names the Slack user groups: the lead is told they
+  have the authority to make decisions about the event, and everyone else is
+  told to be aware of it, contact the lead, and await instructions. See
+  [Tagging the shift](#tagging-the-shift).
 
 **And if decam-chatterbox itself fails, it says so in the channel.** An alert
 nobody hears about is indistinguishable from no alert at all, so a decode
@@ -88,7 +93,8 @@ Then set the bot token in the environment -- it is never stored in the config:
 export SLACK_BOT_TOKEN=xoxb-...
 ```
 
-The token needs the `chat:write` and `files:write` scopes. A bot token is
+The token needs the `chat:write` and `files:write` scopes, plus
+`usergroups:read` to [tag the shift crew](#tagging-the-shift) by handle. A bot token is
 required rather than an incoming webhook because webhooks cannot upload
 files, and every post carries the dark-hours plot.
 
@@ -141,6 +147,42 @@ rendered as a visible first block, not just carried in the notification text.
 
 Set `priority.enabled: false` to turn the whole feature off -- no badge, no
 mention, no cross-post, ever, regardless of the thresholds.
+
+## Tagging the shift
+
+`slack.mention` pages someone; `slack.crew` says what they are for. Directly
+under the header of a high-priority alert, the post tells the people on duty
+what is expected of them: the **lead** (`slack.crew.lead`, called
+`slack.crew.lead_role` -- "ToO lead" by default -- in the message) is named as
+the one with authority to make decisions about the event, and the groups in
+`slack.crew.notify` are told to be aware of it, get in contact with the lead as
+soon as possible, and await further instructions. These are Slack *user
+groups*, which follow the rota, so nobody is named personally. Both are empty
+by default, so nothing is tagged until they are set:
+
+```yaml
+slack:
+  crew:
+    lead: decam-too-lead
+    notify: [decam-observers, decam-night-support]
+```
+
+The crew is tagged on the same alerts that get `slack.mention`: real, not
+retracted, and high priority (see [Priority triage](#priority-triage)).
+`slack.crew.only_high_priority: false` tags on every real alert instead. Two
+cases are deliberately **not** tagged, and the post says which: an alert that
+is not a real superevent (the hourly mock), and an event older than
+`slack.crew.max_age_hours` (24 by default, so replaying an archived alert cannot
+tell the shift that a long-gone event needs a decision). `slack.crew.enabled:
+false` switches the whole thing off.
+
+A Slack mention only notifies when written with the group's **ID**; the handle
+typed as text looks identical and pings nobody. The bot looks the IDs up from
+the handles once (`usergroups.list`, scope `usergroups:read`), or you can give
+them in `slack.crew.ids` to skip the lookup. If a group cannot be resolved the
+post names it in plain text and carries a visible warning that it was not
+notified, and `decam-chatterbox doctor` reports the same thing before an alert
+arrives.
 
 ## Heartbeat and shutdown notice
 

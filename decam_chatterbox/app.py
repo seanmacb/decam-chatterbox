@@ -29,7 +29,7 @@ from .ingest.enrich_gracedb import enrich_chirp_mass
 from .models import Trigger
 from .plots.darkhours import plot_dark_hours, region_hours_summary
 from .priority import PriorityAssessment, assess_priority
-from .slackbot.blocks import build_failure_blocks, build_trigger_blocks, plain_text_summary
+from .slackbot.blocks import build_failure_blocks, build_trigger_blocks, crew_applies, plain_text_summary
 from .slackbot.client import PostedMessage, SlackPoster
 
 __all__ = ["TriggerReport", "process_notice", "post_failure", "run_service"]
@@ -147,7 +147,17 @@ def process_notice(
                 logger.error("Could not render the dark-hours plot: %s", exc)
                 warnings.append(f"dark-hours plot failed: {exc}")
 
-    blocks = build_trigger_blocks(trigger, events, dark_hours, dark_stats, config, priority=priority)
+    # The poster is needed before the blocks: tagging the shift takes Slack's
+    # user group IDs, which only it can look up. Skipped for an alert that
+    # tags nobody, so a mock alert or a routine detection does not spend a
+    # call to learn that.
+    if post:
+        poster = poster or SlackPoster(config)
+    crew_ids = poster.crew_ids() if post and crew_applies(trigger, config, priority) else None
+
+    blocks = build_trigger_blocks(
+        trigger, events, dark_hours, dark_stats, config, priority=priority, crew_ids=crew_ids
+    )
     text = plain_text_summary(trigger, priority)
 
     report = TriggerReport(
@@ -163,7 +173,6 @@ def process_notice(
     )
 
     if post:
-        poster = poster or SlackPoster(config)
         label = f"{trigger.superevent_id}_{trigger.alert_type.lower()}"
         try:
             report.posted = poster.post(
