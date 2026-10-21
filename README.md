@@ -31,6 +31,17 @@ the dark-hours plot):
   the -12 deg and -18 deg crossings, moonrise/moonset, illumination, and the
   Moon's separation from the localization centroid. In UTC and Chile local
   time.
+- **When the field is visible**: the window during the night in which the
+  localization is above the airmass limit, in UTC with Chile local beside it.
+  Given for the most probable position (with when it is highest), for *any
+  part* of the 90% credible region, and for *most of it* (over half its
+  probability), plus the moment the largest share is up. A window cut off by
+  the Sun crossing -12 deg rather than by the field setting is marked
+  `(dusk)` or `(dawn)`, since "until 09:24" means something else when that is
+  just the end of the night. It uses the dark-hours map's own limits and the
+  same altitude calculation, so the hours there and the times here cannot
+  disagree. Only the credible region counts: the faint probability a real
+  skymap has across the rest of the sky does not make a field "visible".
 - **Weather and site links** for Cerro Tololo.
 - **Localization contour over accessible dark hours**: a full-sky map coloured
   by hours per pixel with airmass < 2 while the Sun is below -12 deg, with the
@@ -297,7 +308,8 @@ decam_chatterbox/
   models.py       Trigger, Localization, Geometry, ExternalCoincidence, GwEnrichment
   ingest/         notice decoding (JSON + Avro), transports (SCIMMA, files, replay),
                   the optional GraceDB chirp-mass lookup
-  astro/          skymap credible regions, the CTIO almanac, accessible dark hours
+  astro/          skymap credible regions, the CTIO almanac, accessible dark hours,
+                  when the field is visible
   plots/          dark-hours map with the localization contour drawn on it
   priority.py     high-priority triage: FAR, area and NS-classification thresholds
   heartbeat.py    the hourly "still running" post and the shutdown notice (serve only)
@@ -321,6 +333,11 @@ hand-rolled substitute. Notable checks:
 
 - The vectorized dark-hours altitude approximation is checked against
   astropy's own full `AltAz` transform at a handful of pixel/time pairs.
+- The visibility windows are checked against astropy's `AltAz` at CTIO: the
+  rising edge sits on the altitude limit, the highest altitude matches, and
+  the window length agrees with the dark-hours map's hours for the same
+  pixel. Probability in a skymap's tails does not make a field visible; only
+  its credible region counts.
 - A notice's `skymap` field arrives as raw bytes over SCIMMA (Avro) and
   base64-encoded text over GCN (JSON) -- both are decoded to the same
   localization.

@@ -14,6 +14,7 @@ import numpy as np
 
 from ..astro.almanac import CTIO_TZ, NightEvents, format_time, moon_separation_deg
 from ..astro.darkhours import DarkHoursMap
+from ..astro.visibility import MAJORITY, FieldVisibility, Window
 from ..config import Config
 from ..links import format_link_list, gracedb_link, site_links
 from ..models import Trigger
@@ -250,12 +251,71 @@ def _localization_blocks(trigger: Trigger) -> list[dict[str, Any]]:
 # ------------------------------------------------------------- observability
 
 
+def _clock(t) -> str:
+    """``HH:MM UTC [HH:MM Chile]``, undated: the night is stated above."""
+    return f"{t.utc.strftime('%H:%M')} UTC [{format_time(t, CTIO_TZ)}]"
+
+
+def _span(window: Window) -> str:
+    """A window as ``start -> end (h)``, noting dusk or dawn bounds."""
+    start = _clock(window.start) + (" _(dusk)_" if window.starts_at_dusk else "")
+    end = _clock(window.end) + (" _(dawn)_" if window.ends_at_dawn else "")
+    return f"{start}  ->  {end}  ({window.hours:.1f} h)"
+
+
+def _visibility_lines(visibility: FieldVisibility) -> list[str]:
+    """When the field is up, from the most probable position and from the
+    credible region as a whole.
+
+    The two answer different questions. The most probable position gives one
+    clean window, which is what an observer reads first; the region says how
+    much of an extended localization is reachable at once, which for a large
+    GW map is often the number that matters.
+    """
+    lines = [
+        f"*When the field is visible* (airmass < {visibility.airmass_limit:g}, altitude > "
+        f"{visibility.altitude_limit_deg:.0f} deg, Sun < {visibility.sun_alt_limit_deg:g} deg; "
+        f"UTC, Chile local in brackets)"
+    ]
+
+    if visibility.peak is None:
+        lines.append(
+            ":warning: The most probable position never reaches the airmass limit during this night."
+        )
+    elif visibility.peak.whole_night:
+        lines.append(f"Most probable position: up all night ({visibility.peak.hours:.1f} h)")
+    else:
+        lines.append(f"Most probable position: {_span(visibility.peak)}")
+    if visibility.peak_highest_time is not None and visibility.peak is not None:
+        lines.append(
+            f"Highest at {_clock(visibility.peak_highest_time)}, altitude "
+            f"{visibility.peak_highest_altitude_deg:.0f} deg"
+        )
+
+    if visibility.any_part is None:
+        lines.append(":warning: No part of the credible region is up at any time during this night.")
+        return lines
+
+    lines.append(f"Any part of the credible region: {_span(visibility.any_part)}")
+    if visibility.most is not None:
+        lines.append(f"Most of it (over {MAJORITY:.0%} of its probability): {_span(visibility.most)}")
+    else:
+        lines.append(f"There is no time at which over {MAJORITY:.0%} of its probability is up.")
+    if visibility.best_time is not None:
+        lines.append(
+            f"Best at {_clock(visibility.best_time)}, with "
+            f"{visibility.best_fraction:.0%} of the region's probability up"
+        )
+    return lines
+
+
 def _observability_blocks(
     trigger: Trigger,
     events: NightEvents,
     dark_hours: DarkHoursMap,
     dark_stats: dict[str, float] | None,
     config: Config,
+    visibility: FieldVisibility | None = None,
 ) -> list[dict[str, Any]]:
     def span(start, end, hours: float, label: str) -> str:
         return (
@@ -312,6 +372,8 @@ def _observability_blocks(
         _section("\n".join(moon_lines)),
         _section("\n".join(dark_lines)),
     ]
+    if visibility is not None:
+        blocks.append(_section("\n".join(_visibility_lines(visibility))))
     if links:
         blocks.append(_section("*Site conditions*\n" + format_link_list(links)))
     return blocks
@@ -327,6 +389,7 @@ def build_trigger_blocks(
     dark_stats: dict[str, float] | None,
     config: Config,
     priority: PriorityAssessment | None = None,
+    visibility: FieldVisibility | None = None,
 ) -> list[dict[str, Any]]:
     """Build the Block Kit payload for a notice.
 
@@ -347,6 +410,10 @@ def build_trigger_blocks(
         Output of `decam_chatterbox.priority.assess_priority`. Adds a
         high-priority badge to the header and a "why" line beneath it when
         given; omitted entirely when None.
+    visibility : `FieldVisibility`, optional
+        When the field is up during the night, from
+        `decam_chatterbox.astro.visibility.field_visibility`. That section is
+        omitted when None.
 
     Returns
     -------
@@ -365,7 +432,7 @@ def build_trigger_blocks(
     blocks += _localization_blocks(trigger)
     if events is not None and dark_hours is not None:
         blocks.append(_divider())
-        blocks += _observability_blocks(trigger, events, dark_hours, dark_stats, config)
+        blocks += _observability_blocks(trigger, events, dark_hours, dark_stats, config, visibility)
 
     footer = []
     if trigger.localization is not None:

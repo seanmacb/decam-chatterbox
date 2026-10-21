@@ -22,6 +22,7 @@ from astropy.time import Time
 
 from .astro.almanac import NightEvents, night_events
 from .astro.darkhours import DarkHoursMap, dark_hours_map
+from .astro.visibility import FieldVisibility, field_visibility
 from .config import Config
 from .heartbeat import Heartbeat, ServiceStatus, post_shutdown, post_startup
 from .ingest.decode import decode_notice
@@ -48,6 +49,9 @@ class TriggerReport:
     priority: PriorityAssessment
     blocks: list[dict[str, Any]]
     text: str
+    #: When the field is up during the night; None for a retraction, a notice
+    #: with no localization, or when the calculation failed.
+    visibility: FieldVisibility | None = None
     plots: list[Path] = field(default_factory=list)
     posted: PostedMessage | None = None
     #: Set only when `priority.is_high_priority` and
@@ -101,6 +105,7 @@ def process_notice(
     events: NightEvents | None = None
     dark_hours: DarkHoursMap | None = None
     dark_stats: dict[str, float] | None = None
+    visibility: FieldVisibility | None = None
     plots: list[Path] = []
 
     if not trigger.is_retraction:
@@ -134,6 +139,20 @@ def process_notice(
 
         if dark_hours is not None and trigger.localization is not None:
             dark_stats = region_hours_summary(dark_hours, trigger.localization)
+            # When the field is up, not just for how long. A failure here
+            # costs that one section, not the alert.
+            try:
+                visibility = field_visibility(
+                    events,
+                    trigger.localization,
+                    dark_hours,
+                    trigger.geometry.peak_ra_deg,
+                    trigger.geometry.peak_dec_deg,
+                    step_minutes=config.dark_hours.step_minutes,
+                )
+            except Exception as exc:
+                logger.error("Could not work out when the field is visible: %s", exc)
+                warnings.append(f"visibility windows failed: {exc}")
             try:
                 plots.append(
                     plot_dark_hours(
@@ -147,7 +166,9 @@ def process_notice(
                 logger.error("Could not render the dark-hours plot: %s", exc)
                 warnings.append(f"dark-hours plot failed: {exc}")
 
-    blocks = build_trigger_blocks(trigger, events, dark_hours, dark_stats, config, priority=priority)
+    blocks = build_trigger_blocks(
+        trigger, events, dark_hours, dark_stats, config, priority=priority, visibility=visibility
+    )
     text = plain_text_summary(trigger, priority)
 
     report = TriggerReport(
@@ -158,6 +179,7 @@ def process_notice(
         priority=priority,
         blocks=blocks,
         text=text,
+        visibility=visibility,
         plots=plots,
         warnings=warnings,
     )
