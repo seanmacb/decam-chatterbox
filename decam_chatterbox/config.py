@@ -18,6 +18,7 @@ __all__ = [
     "SlackConfig",
     "IngestConfig",
     "DarkHoursConfig",
+    "AirmassAnimationConfig",
     "EnrichConfig",
     "PriorityConfig",
     "HeartbeatConfig",
@@ -126,6 +127,31 @@ class DarkHoursConfig:
 
 
 @dataclass
+class AirmassAnimationConfig:
+    """The animated airmass map of night zero posted under each alert.
+
+    It is posted in the alert's thread after the first post, not with it: a
+    night is dozens of frames and takes tens of seconds to render, which the
+    first post cannot afford.
+    """
+
+    enabled: bool = True
+    #: Airmass above which the map is masked to NaN (drawn grey) rather than
+    #: coloured.
+    mask_above: float = 3.8
+    #: Minutes between frames. 10 gives about 70 frames for a winter night.
+    step_minutes: float = 10.0
+    fps: int = 8
+    #: Frame resolution; a GIF this size stays under a few MB.
+    dpi: int = 80
+    #: How long ``serve`` waits, once stopping, for an animation still being
+    #: rendered or posted, after the shutdown notice has gone out. Keep it
+    #: below a service manager's stop timeout (systemd's ``TimeoutStopSec``),
+    #: which otherwise kills the process mid-wait.
+    shutdown_wait_s: float = 30.0
+
+
+@dataclass
 class EnrichConfig:
     """Optional GraceDB supplement: the binned chirp-mass estimate.
 
@@ -215,6 +241,7 @@ class Config:
     slack: SlackConfig = field(default_factory=SlackConfig)
     ingest: IngestConfig = field(default_factory=IngestConfig)
     dark_hours: DarkHoursConfig = field(default_factory=DarkHoursConfig)
+    airmass_animation: AirmassAnimationConfig = field(default_factory=AirmassAnimationConfig)
     enrich: EnrichConfig = field(default_factory=EnrichConfig)
     priority: PriorityConfig = field(default_factory=PriorityConfig)
     heartbeat: HeartbeatConfig = field(default_factory=HeartbeatConfig)

@@ -38,7 +38,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-v", "--verbose", action="store_true", help="Log at DEBUG level")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("serve", help="Consume the configured alert source (SCIMMA by default)")
+    p_serve = sub.add_parser("serve", help="Consume the configured alert source (SCIMMA by default)")
+    p_serve.add_argument(
+        "--no-animation", action="store_true", help="Do not post the animated airmass map of night zero"
+    )
 
     p_replay = sub.add_parser("replay", help="Handle one or more saved notice files")
     p_replay.add_argument("paths", nargs="+", help="Record files (.json or .avro)")
@@ -47,7 +50,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Render and print the message without posting to Slack",
     )
-    p_replay.add_argument("--out-dir", help="Where to write the dark-hours plot")
+    p_replay.add_argument("--out-dir", help="Where to write the dark-hours plot and airmass animation")
+    p_replay.add_argument(
+        "--no-animation",
+        action="store_true",
+        help="Do not render and post the animated airmass map of night zero",
+    )
 
     sub.add_parser("test-post", help="Post a test message to confirm Slack access")
     p_ping = sub.add_parser(
@@ -87,7 +95,7 @@ def _cmd_serve(args: argparse.Namespace, config: Config) -> int:
     from .app import run_service
 
     try:
-        handled = run_service(config)
+        handled = run_service(config, run_animation=not args.no_animation)
     except Exception as exc:
         # run_service has already posted this to the channel; the operator
         # gets one line and a non-zero exit, not a traceback, since the
@@ -107,6 +115,7 @@ def _cmd_replay(args: argparse.Namespace, config: Config) -> int:
     out_dir = Path(args.out_dir).expanduser() if args.out_dir else None
 
     failures = 0
+    pending = []
     for path in args.paths:
         print(f"\n{'=' * 72}\n{path}\n{'=' * 72}")
         try:
@@ -117,6 +126,7 @@ def _cmd_replay(args: argparse.Namespace, config: Config) -> int:
                 poster=poster,
                 post=not args.dry_run,
                 out_dir=out_dir,
+                run_animation=not args.no_animation,
             )
         except Exception as exc:
             logger.error("Failed on %s: %s", path, exc, exc_info=args.verbose)
@@ -133,6 +143,19 @@ def _cmd_replay(args: argparse.Namespace, config: Config) -> int:
             print(f"  warning: {warning}")
         if report.posted is not None and report.posted.offline:
             print("  (offline: payload written instead of posted)")
+        if report.has_background_work:
+            pending.append(report)
+
+    # The animations render on daemon threads, so exiting now would abandon
+    # them part-way: wait, and say what is being waited for.
+    for report in pending:
+        print(f"\nWaiting for the airmass animation of {report.trigger.superevent_id} to be posted.")
+        report.wait_for_background()
+        if report.animation is not None:
+            print(f"  animation: {report.animation}")
+        for warning in report.warnings:
+            if "airmass animation" in warning:
+                print(f"  warning: {warning}")
 
     return 1 if failures else 0
 

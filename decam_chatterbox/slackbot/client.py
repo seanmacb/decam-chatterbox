@@ -222,6 +222,58 @@ class SlackPoster:
                 posted.uploaded.append(str(path))
         return posted
 
+    def reply(
+        self,
+        parent: PostedMessage,
+        blocks: list[dict[str, Any]],
+        text: str,
+        files: list[Path | str] | None = None,
+        label: str = "reply",
+    ) -> PostedMessage:
+        """Reply in a posted message's thread, optionally attaching files.
+
+        Parameters
+        ----------
+        parent : `PostedMessage`
+            The message to thread onto. Its channel is used as-is, so a reply
+            always lands next to the message it is about.
+        blocks : `list` [`dict`]
+            Block Kit payload.
+        text : `str`
+            Fallback text.
+        files : `list`, optional
+            Paths to upload into the same thread.
+        label : `str`
+            Name used for the offline payload file.
+
+        Returns
+        -------
+        posted : `PostedMessage`
+            The reply. Offline -- or when `parent` has no timestamp to thread
+            onto, which only an offline parent lacks -- the payload is written
+            locally instead, as `post` does.
+        """
+        if self.offline or parent.ts is None:
+            return self._write_offline(parent.channel, blocks, text, files, label)
+
+        client = self._get_client()
+        response = client.chat_postMessage(
+            channel=parent.channel,
+            thread_ts=parent.ts,
+            text=text,
+            blocks=blocks,
+            username=self.config.slack.username,
+            icon_emoji=self.config.slack.icon_emoji,
+            unfurl_links=False,
+            unfurl_media=False,
+        )
+        posted = PostedMessage(channel=parent.channel, ts=response.get("ts"))
+        logger.info("Replied in %s (thread_ts=%s)", parent.channel, parent.ts)
+        for path in files or []:
+            if self.upload(path, channel=parent.channel, thread_ts=parent.ts):
+                posted.uploaded.append(str(path))
+        return posted
+
     def upload(self, path: Path | str, channel: str, thread_ts: str | None = None) -> bool:
         """Upload a file with ``files_upload_v2``.
 

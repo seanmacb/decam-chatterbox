@@ -22,6 +22,7 @@ from ..priority import PriorityAssessment
 
 __all__ = [
     "build_trigger_blocks",
+    "build_airmass_animation_blocks",
     "build_failure_blocks",
     "plain_text_summary",
     "MAX_SECTION_CHARS",
@@ -450,6 +451,48 @@ def build_trigger_blocks(
         logger.warning("Trimming %d blocks to Slack's limit of 50", len(blocks))
         blocks = blocks[:49] + [_context("_Message truncated._")]
     return blocks
+
+
+def build_airmass_animation_blocks(
+    trigger: Trigger,
+    events: NightEvents,
+    mask_above: float,
+    sun_alt_limit_deg: float = -12.0,
+) -> list[dict[str, Any]]:
+    """The caption posted with the animated airmass map of night zero.
+
+    Parameters
+    ----------
+    trigger : `Trigger`
+        The alert, for what the contour is.
+    events : `NightEvents`
+        The night animated.
+    mask_above : `float`
+        Airmass above which the map is masked, stated so the grey is not a
+        mystery.
+    sun_alt_limit_deg : `float`
+        Sun altitude bounding the animated window.
+
+    Returns
+    -------
+    blocks : `list` [`dict`]
+    """
+    from astropy.time import Time
+
+    start, end = events.observing_window(sun_alt_limit_deg)
+    first, last = Time(start, format="mjd", scale="utc"), Time(end, format="mjd", scale="utc")
+    # The same contours as the dark-hours plot:
+    # `decam_chatterbox.plots.style.localization_levels`.
+    return [
+        _section(
+            f":movie_camera: *Airmass at CTIO through night zero* ({events.day_obs}) for "
+            f"{trigger.superevent_id}\n"
+            f"Each frame is the airmass of the whole sky at one moment, from {_clock(first)} to "
+            f"{_clock(last)} (Sun below {sun_alt_limit_deg:g} deg; UTC, Chile local in brackets). "
+            "Red: the localization's 50% and 90% credible regions, and its most probable position."
+            f" Grey is below the horizon or above airmass {mask_above:g}."
+        )
+    ]
 
 
 def build_failure_blocks(

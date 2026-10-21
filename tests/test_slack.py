@@ -4,7 +4,12 @@ import json
 
 import pytest
 
-from decam_chatterbox.slackbot.client import SlackPoster, normalize_mention, render_blocks_as_text
+from decam_chatterbox.slackbot.client import (
+    PostedMessage,
+    SlackPoster,
+    normalize_mention,
+    render_blocks_as_text,
+)
 
 
 def test_poster_is_offline_without_a_token(config):
@@ -127,3 +132,38 @@ def test_post_renders_a_normalized_mention_and_skips_an_invalid_one(config):
     payload = json.loads((poster.output_dir / "normalized.json").read_text())
     assert payload["blocks"][0]["text"]["text"] == ":bell: *On-call:* <!subteam^S0C4J7UE4NB>"
     assert payload["text"] == "<!subteam^S0C4J7UE4NB> hello"
+
+
+def test_offline_reply_writes_payload_to_the_parents_channel(config):
+    poster = SlackPoster(config)
+    parent = PostedMessage(channel="#alerts", ts=None, offline=True)
+    blocks = [{"type": "section", "text": {"type": "mrkdwn", "text": "in thread"}}]
+    posted = poster.reply(parent, blocks, "in thread", files=["anim.gif"], label="myreply")
+    assert posted.offline
+
+    written = json.loads((poster.output_dir / "myreply.json").read_text())
+    assert written["channel"] == "#alerts"
+    assert written["files"] == ["anim.gif"]
+
+
+def test_reply_threads_the_message_and_its_files(config, tmp_path, monkeypatch):
+    monkeypatch.setenv(config.slack.bot_token_env, "xoxb-test")
+    calls = []
+
+    class FakeClient:
+        def chat_postMessage(self, **kwargs):
+            calls.append(("message", kwargs))
+            return {"ts": "2.0", "channel": kwargs["channel"]}
+
+        def files_upload_v2(self, **kwargs):
+            calls.append(("file", kwargs))
+
+    gif = tmp_path / "anim.gif"
+    gif.write_bytes(b"GIF89a")
+    poster = SlackPoster(config)
+    poster._client = FakeClient()
+    posted = poster.reply(PostedMessage(channel="C123", ts="1.0"), [], "in thread", files=[gif])
+
+    assert posted.ts == "2.0" and posted.uploaded == [str(gif)]
+    assert [kind for kind, _ in calls] == ["message", "file"]
+    assert all(kwargs["thread_ts"] == "1.0" and kwargs["channel"] == "C123" for _, kwargs in calls)

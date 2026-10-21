@@ -14,7 +14,7 @@ left for later, and for a human.
 ## What it posts
 
 **One message per notice** (typically a few seconds, dominated by rendering
-the dark-hours plot):
+the dark-hours plot), plus an animation in its thread (see below):
 
 - **What the notice says**: alert type (`PRELIMINARY`/`INITIAL`/`UPDATE`/
   `RETRACTION`/`EARLYWARNING`), FAR and significance, CBC classification
@@ -59,6 +59,24 @@ the dark-hours plot):
   alert still reaches `slack.channel` -- it only adds the badge, gates
   `slack.mention`, and controls an additional cross-post to
   `slack.urgent_channel`. See [Priority triage](#priority-triage).
+
+**In the alert's thread, a little later** (tens of seconds): **an animated
+airmass map of night zero**. Each frame is the airmass of the whole sky at
+CTIO at one moment of the first night (Sun below -12 deg), with the
+localization contours and the most probable position over it; a compact
+localization also gets a zoomed panel beside the all-sky one. Anything above
+airmass 3.8, or below the horizon, is masked to NaN and drawn grey rather than
+coloured, so a field on the horizon cannot be mistaken for one that is merely
+a little worse. Each frame's title gives the time and the airmass of the most
+probable position. It uses the same altitude calculation as the dark-hours
+map and the visibility windows, so all three agree. Rendering a night takes
+tens of seconds, which the first post cannot afford, so it runs on a
+background thread and never delays an alert; it is a GIF because Slack plays
+those inline and no video encoder has to be installed. It is posted once,
+under the main-channel message -- not again under a high-priority
+cross-post. Switch it off with `airmass_animation.enabled: false`, or for one
+run with `--no-animation`. `replay --dry-run` posts nothing and so renders
+nothing.
 
 **And if decam-chatterbox itself fails, it says so in the channel.** An alert
 nobody hears about is indistinguishable from no alert at all, so a decode
@@ -191,6 +209,13 @@ itself fails (which already posts as a failure -- see
 heartbeat, so the channel can tell "stopped on purpose" from "crashed" or
 "hung" without cross-referencing a log.
 
+**An airmass animation still rendering at shutdown is given a bounded time to
+finish** (`airmass_animation.shutdown_wait_s`, 30 s by default), after the
+stop post has gone out, since it runs on a thread that dies with the process.
+Anything still running after that is abandoned and logged; a further Ctrl-C
+abandons the wait at once. Keep the wait below the service manager's stop
+timeout -- the `TimeoutStopSec=60` below leaves room for it.
+
 Nothing can catch `SIGKILL` (`kill -9`), which is also what a service manager
 sends when a stop takes longer than its timeout, or what the kernel's
 out-of-memory killer sends. A missing stop post together with a stopped
@@ -310,7 +335,8 @@ decam_chatterbox/
                   the optional GraceDB chirp-mass lookup
   astro/          skymap credible regions, the CTIO almanac, accessible dark hours,
                   when the field is visible
-  plots/          dark-hours map with the localization contour drawn on it
+  plots/          dark-hours map with the localization contour drawn on it, and the
+                  animated airmass map of night zero
   priority.py     high-priority triage: FAR, area and NS-classification thresholds
   heartbeat.py    the hourly "still running" post and the shutdown notice (serve only)
   slackbot/       Block Kit construction, delivery
@@ -331,6 +357,11 @@ No network access required: notices are built programmatically at a small
 `ligo.skymap.io`, so the suite exercises the real decode path rather than a
 hand-rolled substitute. Notable checks:
 
+- The airmass animation's sky airmass is checked against astropy's `AltAz` at
+  CTIO; it is a looping GIF with a frame per time step whose frames actually
+  change; it is posted once, threaded under the main-channel message rather
+  than the urgent cross-post; and `serve` joins it before exiting rather than
+  dropping it.
 - The vectorized dark-hours altitude approximation is checked against
   astropy's own full `AltAz` transform at a handful of pixel/time pairs.
 - The visibility windows are checked against astropy's `AltAz` at CTIO: the
