@@ -161,4 +161,6 @@ def config(tmp_path):
     cfg.paths.work_dir = str(tmp_path / "work")
     # Tests must never reach the network.
     cfg.enrich.gracedb = False
+    # Tens of seconds of rendering; the tests that want it say so.
+    cfg.airmass_animation.enabled = False
     return cfg

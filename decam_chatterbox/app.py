@@ -1,17 +1,23 @@
 """The decam-chatterbox service: turn an LVK alert notice into a Slack post.
 
 Unlike chatterbox's two-stage Rubin pipeline -- an immediate post, then a
-scheduler-simulation reply threaded onto it -- there is exactly one stage
+scheduler-simulation reply threaded onto it -- the alert itself is one stage
 here: decode the notice, compute CTIO observability, post. Chirp-mass
 enrichment runs concurrently with the almanac and dark-hours work so it does
-not add to the critical path.
+not add to the critical path. The one thing that follows later is the
+animated airmass map of night zero, which takes tens of seconds to render and
+so is drawn on a background thread and posted in the alert's thread once
+ready.
 
 Failures are contained. If the dark-hours plot cannot be rendered, the text
-still goes out; if chirp-mass enrichment fails, the post just omits it.
+still goes out; if chirp-mass enrichment fails, the post just omits it; if the
+animation fails, the alert has already gone out without it.
 """
 
 import logging
+import re
 import signal
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -33,7 +39,7 @@ from .priority import PriorityAssessment, assess_priority
 from .slackbot.blocks import build_failure_blocks, build_trigger_blocks, plain_text_summary
 from .slackbot.client import PostedMessage, SlackPoster
 
-__all__ = ["TriggerReport", "process_notice", "post_failure", "run_service"]
+__all__ = ["TriggerReport", "process_notice", "post_failure", "run_service", "wait_for_background"]
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +66,35 @@ class TriggerReport:
     elapsed_s: float = 0.0
     #: Non-fatal problems encountered, for reporting in the CLI.
     warnings: list[str] = field(default_factory=list)
+    #: The thread rendering and posting the airmass animation, and the GIF it
+    #: wrote. The thread is a daemon, so it has to be joined before the
+    #: process exits or the animation is never posted.
+    animation_thread: threading.Thread | None = None
+    animation: Path | None = None
+
+    @property
+    def has_background_work(self) -> bool:
+        """True while the airmass animation is still being rendered or
+        posted."""
+        return self.animation_thread is not None and self.animation_thread.is_alive()
+
+    def wait_for_background(self, timeout: float | None = None) -> bool:
+        """Block until the airmass animation has been posted.
+
+        Parameters
+        ----------
+        timeout : `float`, optional
+            Seconds to wait. None waits indefinitely.
+
+        Returns
+        -------
+        done : `bool`
+            False when it is still running after `timeout`.
+        """
+        if self.animation_thread is None:
+            return True
+        self.animation_thread.join(timeout=timeout)
+        return not self.animation_thread.is_alive()
 
 
 def process_notice(
@@ -68,6 +103,7 @@ def process_notice(
     poster: SlackPoster | None = None,
     post: bool = True,
     out_dir: Path | None = None,
+    run_animation: bool = True,
 ) -> TriggerReport:
     """Handle one alert notice end to end.
 
@@ -82,8 +118,13 @@ def process_notice(
     post : `bool`
         Actually post. When False the blocks are built and returned only.
     out_dir : `pathlib.Path`, optional
-        Where the dark-hours plot is written. Defaults to a per-source work
-        directory.
+        Where the dark-hours plot and the airmass animation are written.
+        Defaults to a per-source work directory.
+    run_animation : `bool`
+        Render the airmass animation of night zero and post it in the
+        alert's thread, when ``airmass_animation.enabled`` and the alert is
+        actually being posted. It runs on a background thread; see
+        `TriggerReport.wait_for_background`.
 
     Returns
     -------
@@ -216,6 +257,17 @@ def process_notice(
                 logger.error("Posting the urgent cross-post failed: %s", exc)
                 warnings.append(f"urgent-channel post failed: {exc}")
 
+        # Started only now, so it never delays the alert. Posted once, under
+        # the main-channel message: the urgent cross-post is for getting
+        # attention, and the thread with the detail is the original.
+        if (
+            run_animation
+            and config.airmass_animation.enabled
+            and events is not None
+            and trigger.localization is not None
+        ):
+            _start_animation(trigger, config, events, poster, report, out_dir)
+
     report.elapsed_s = time.monotonic() - started
     logger.info(
         "%s (%s) handled in %.2f s (%d plot(s), %d warning(s))",
@@ -226,6 +278,93 @@ def process_notice(
         len(warnings),
     )
     return report
+
+
+def _start_animation(
+    trigger: Trigger,
+    config: Config,
+    events: NightEvents,
+    poster: SlackPoster,
+    report: TriggerReport,
+    out_dir: Path,
+) -> None:
+    """Render the airmass animation off the main thread and post it in-thread.
+
+    A night is dozens of frames and takes tens of seconds, so it cannot be
+    part of the first post. It is posted as a reply to it instead -- or
+    standalone, when the first post could not be threaded onto (it failed,
+    or it was written offline).
+    """
+    from .plots.airmass_animation import plot_airmass_animation
+    from .slackbot.blocks import build_airmass_animation_blocks
+
+    settings = config.airmass_animation
+    sun_alt_limit_deg = config.dark_hours.sun_alt_limit_deg
+    # Two notices of the same type for one event (a pair of Preliminaries,
+    # say) can arrive seconds apart, so the creation time is in the name: the
+    # second render must not overwrite the first while it is being uploaded.
+    created = re.sub(r"[^0-9A-Za-z]", "", str(trigger.time_created))
+    label = f"{trigger.superevent_id}_{trigger.alert_type.lower()}_{created}_airmass"
+    geo = trigger.geometry
+    peak = (geo.peak_ra_deg, geo.peak_dec_deg) if geo is not None else None
+
+    def render_and_post() -> None:
+        # A background thread's exceptions are invisible, so everything is
+        # caught and logged here: a missing animation must never take the
+        # alert path down, and has no right to vanish silently either.
+        try:
+            path = plot_airmass_animation(
+                events,
+                trigger.localization,
+                out_dir / f"{label}.gif",
+                mask_above=settings.mask_above,
+                step_minutes=settings.step_minutes,
+                sun_alt_limit_deg=sun_alt_limit_deg,
+                peak=peak,
+                fps=settings.fps,
+                dpi=settings.dpi,
+            )
+            report.animation = path
+        except Exception as exc:
+            logger.error("Could not render the airmass animation for %s: %s", trigger.superevent_id, exc)
+            report.warnings.append(f"airmass animation failed: {exc}")
+            return
+
+        try:
+            blocks = build_airmass_animation_blocks(trigger, events, settings.mask_above, sun_alt_limit_deg)
+            text = f"Airmass at CTIO through night zero for {trigger.superevent_id}"
+            if report.posted is not None and report.posted.ts is not None:
+                poster.reply(report.posted, blocks, text, files=[path], label=label)
+            else:
+                poster.post(blocks, text, is_test=not trigger.is_real, files=[path], label=label)
+        except Exception as exc:
+            logger.error("Could not post the airmass animation for %s: %s", trigger.superevent_id, exc)
+            report.warnings.append(f"airmass animation post failed: {exc}")
+
+    thread = threading.Thread(target=render_and_post, name=f"airmass-{trigger.superevent_id}", daemon=True)
+    thread.start()
+    report.animation_thread = thread
+
+
+def wait_for_background(reports: list[TriggerReport], timeout: float) -> list[TriggerReport]:
+    """Give outstanding airmass animations a bounded time to finish.
+
+    Parameters
+    ----------
+    reports : `list` [`TriggerReport`]
+        Reports that may still have an animation rendering or posting.
+    timeout : `float`
+        Seconds to wait for all of them together.
+
+    Returns
+    -------
+    abandoned : `list` [`TriggerReport`]
+        Those still running when the time ran out.
+    """
+    deadline = time.monotonic() + max(timeout, 0.0)
+    for report in reports:
+        report.wait_for_background(timeout=max(deadline - time.monotonic(), 0.0))
+    return [r for r in reports if r.has_background_work]
 
 
 def post_failure(
@@ -342,7 +481,7 @@ def _ignore_system_stop_signals() -> None:
             return
 
 
-def run_service(config: Config, paths=None) -> int:
+def run_service(config: Config, paths=None, run_animation: bool = True) -> int:
     """Consume the configured source and post about every notice.
 
     Runs until interrupted (Ctrl-C, or SIGTERM/SIGHUP, which are installed to
@@ -352,12 +491,19 @@ def run_service(config: Config, paths=None) -> int:
     between alerts, and a deliberate stop posts its own notice rather than
     just going quiet.
 
+    Airmass animations render on their own threads and never hold up the
+    next alert. On the way out, any still in progress get up to
+    ``airmass_animation.shutdown_wait_s`` to finish -- after the shutdown
+    notice, so a service manager's stop timeout cannot cost that instead.
+
     Parameters
     ----------
     config : `Config`
         Configuration.
     paths : sequence, optional
         Explicit record paths, forcing replay mode.
+    run_animation : `bool`
+        Render and post the airmass animation under each alert.
 
     Returns
     -------
@@ -376,11 +522,15 @@ def run_service(config: Config, paths=None) -> int:
     post_startup(status, config, poster)
 
     handled = 0
+    pending: list[TriggerReport] = []
     try:
         for record, metadata in source:
             origin = metadata.get("origin") or metadata.get("topic") or metadata.get("transport") or ""
             try:
-                process_notice(record, config, poster=poster)
+                report = process_notice(record, config, poster=poster, run_animation=run_animation)
+                pending = [r for r in pending if r.has_background_work]
+                if report.has_background_work:
+                    pending.append(report)
                 handled += 1
                 status.handled = handled
                 status.last_handled_at = Time.now()
@@ -420,7 +570,32 @@ def run_service(config: Config, paths=None) -> int:
         )
         raise
     finally:
+        _finish_animations(pending, config.airmass_animation.shutdown_wait_s)
         heartbeat.stop()
         source.close()
         _restore_signal_handlers(previous_handlers)
     return handled
+
+
+def _finish_animations(pending: list[TriggerReport], timeout: float) -> None:
+    """Let animations still in progress finish before exiting, within reason.
+
+    They run on daemon threads, which die with the process: without this, a
+    stop seconds after an alert would silently drop its animation. Bounded,
+    and a further interrupt abandons the wait rather than the rest of the
+    shutdown.
+    """
+    pending = [r for r in pending if r.has_background_work]
+    if not pending:
+        return
+    names = ", ".join(r.trigger.superevent_id for r in pending)
+    logger.info("Waiting up to %.0f s for the airmass animation(s) of %s", timeout, names)
+    try:
+        abandoned = wait_for_background(pending, timeout)
+    except KeyboardInterrupt:
+        abandoned = [r for r in pending if r.has_background_work]
+    if abandoned:
+        logger.warning(
+            "Abandoned the airmass animation(s) of %s, still in progress at shutdown",
+            ", ".join(r.trigger.superevent_id for r in abandoned),
+        )

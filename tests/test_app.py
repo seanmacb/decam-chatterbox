@@ -125,7 +125,7 @@ def test_run_service_posts_shutdown_on_keyboard_interrupt(tmp_path, notice, conf
     path = tmp_path / "a.json"
     path.write_text(json.dumps(notice))
 
-    def raise_interrupt(record, config, poster=None):
+    def raise_interrupt(record, config, poster=None, **kwargs):
         raise KeyboardInterrupt()
 
     monkeypatch.setattr(app_module, "process_notice", raise_interrupt)

@@ -78,6 +78,22 @@ dark_hours:
   # Set > 0 to also exclude pixels within this many degrees of the Moon.
   moon_avoidance_deg: 30.0
 
+airmass_animation:
+  # An animated airmass map of night zero, posted in each alert's thread.
+  # Rendered in the background after the first post, since a night is
+  # dozens of frames and takes tens of seconds. Not rendered by
+  # `replay --dry-run`, which posts nothing.
+  enabled: true
+  # Airmass above this is masked to NaN and drawn grey, not coloured.
+  mask_above: 3.8
+  # Minutes between frames.
+  step_minutes: 10.0
+  fps: 8
+  dpi: 80
+  # How long `serve` waits, once stopping, for an animation still in
+  # progress. Keep it below systemd's TimeoutStopSec.
+  shutdown_wait_s: 30.0
+
 enrich:
   # GraceDB carries one thing the notice schema has no field for: the binned
   # chirp-mass estimate. Best-effort and time-bounded; failure just omits
