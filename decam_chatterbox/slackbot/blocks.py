@@ -250,6 +250,39 @@ def _localization_blocks(trigger: Trigger) -> list[dict[str, Any]]:
 # ------------------------------------------------------------- observability
 
 
+def _region_lines(dark_stats: dict[str, float], dark_hours: DarkHoursMap) -> list[str]:
+    """How much of the credible region DECam can reach tonight.
+
+    Probability and area are reported separately because neither implies the
+    other: the densest part of a region can be up while most of its sky is
+    not, or the reverse. Both are fractions of the credible region itself,
+    not of the whole map, whose faint tails cover most of the sky.
+    """
+    level = dark_stats.get("credible_level", 0.9)
+    area = dark_stats.get("region_area_deg2", float("nan"))
+    lines = [
+        f"*Within the {level:.0%} localization* ({_fmt(area, ',.0f', ' deg^2')}): "
+        f"max {_fmt(dark_stats.get('max_hours'), '.2f', ' h')}, "
+        f"mean {_fmt(dark_stats.get('mean_hours'), '.2f', ' h')}, "
+        f"probability-weighted mean {_fmt(dark_stats.get('weighted_mean_hours'), '.2f', ' h')} accessible"
+    ]
+    probability = dark_stats.get("probability_accessible", 0.0)
+    area_fraction = dark_stats.get("area_accessible", 0.0)
+    lines.append(
+        f"Reaches airmass < {dark_hours.airmass_limit:g} at some point during this night: "
+        f"probability *{probability:.1%}*  |  area {area_fraction:.1%} "
+        f"({_fmt(dark_stats.get('area_accessible_deg2'), ',.0f', ' deg^2')})"
+    )
+    lines.append(
+        f"_Both are of the region itself, which holds "
+        f"{_fmt(dark_stats.get('region_probability'), '.1%')} of the total probability, so a fully "
+        "accessible region reads 100%. Both are given because neither implies the other._"
+    )
+    if probability == 0.0 and area_fraction == 0.0:
+        lines.append(":warning: No part of the localization reaches the airmass limit during this night.")
+    return lines
+
+
 def _observability_blocks(
     trigger: Trigger,
     events: NightEvents,
@@ -289,22 +322,7 @@ def _observability_blocks(
         f"{dark_hours.window_hours:.2f} h available tonight",
     ]
     if dark_stats is not None:
-        within = (
-            f"Within the localization: max {_fmt(dark_stats.get('max_hours'), '.2f', ' h')}, "
-            f"mean {_fmt(dark_stats.get('mean_hours'), '.2f', ' h')}"
-        )
-        weighted = dark_stats.get("weighted_mean_hours")
-        if weighted is not None and np.isfinite(weighted):
-            within += f", probability-weighted mean {weighted:.2f} h"
-        dark_lines.append(within)
-        dark_lines.append(
-            f"{dark_stats.get('fraction_accessible', 0.0):.0%} of the region reaches airmass < "
-            f"{dark_hours.airmass_limit:g} at some point during this night"
-        )
-        if dark_stats.get("fraction_accessible", 0.0) == 0.0:
-            dark_lines.append(
-                ":warning: No part of the localization reaches the airmass limit during this night."
-            )
+        dark_lines += _region_lines(dark_stats, dark_hours)
 
     links = site_links(config.links)
     blocks = [

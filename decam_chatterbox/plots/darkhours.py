@@ -7,6 +7,7 @@ import healpy as hp
 import numpy as np
 
 from ..astro.darkhours import DarkHoursMap
+from ..astro.skymap import localization_region
 from ..deps import require
 from ..models import Localization
 from .style import (
@@ -100,12 +101,14 @@ def plot_dark_hours(
     )
 
     if title is None:
-        stats = dark_hours.stats_in_region(localization.prob_map > 0)
+        stats = region_hours_summary(dark_hours, localization)
         title = (
             f"Night of {events.day_obs}: {dark_hours.window_hours:.1f} h with Sun < "
             f"{dark_hours.sun_alt_limit_deg:g} deg\n"
-            f"Localization: max {stats['max_hours']:.1f} h, mean {stats['mean_hours']:.1f} h accessible; "
-            f"{stats['fraction_accessible']:.0%} of the region reaches airmass < {dark_hours.airmass_limit:g}"
+            f"{localization.credible_level:.0%} region: max {stats['max_hours']:.1f} h, "
+            f"mean {stats['mean_hours']:.1f} h accessible; {stats['probability_accessible']:.0%} of its "
+            f"probability and {stats['area_accessible']:.0%} of its area reach airmass < "
+            f"{dark_hours.airmass_limit:g}"
         )
     ax.set_title(title, fontsize=10)
 
@@ -120,17 +123,90 @@ def plot_dark_hours(
 
 
 def region_hours_summary(dark_hours: DarkHoursMap, localization: Localization) -> dict[str, float]:
-    """Combine masked and weighted dark-hour statistics for a localization.
+    """Accessible dark time inside a localization's credible region.
+
+    The region is `decam_chatterbox.astro.skymap.localization_region` -- the
+    same one the plot's contour draws -- not every pixel with any probability:
+    a real skymap has faint probability almost everywhere, which would turn
+    every statistic here into a whole-sky one.
+
+    How much of the region DECam can reach tonight is reported two ways,
+    because neither implies the other: the densest part of a region can be up
+    while most of its sky is not, or the reverse.
+
+    Everything is measured at the finer of the two maps' resolutions -- in
+    practice the localization's own -- by replicating the coarser map's
+    pixels, so the region's area is not quantized by the dark-hours map's
+    much larger pixels.
+
+    Parameters
+    ----------
+    dark_hours : `DarkHoursMap`
+        Accessible hours per pixel for the night.
+    localization : `Localization`
+        Localization whose credible region is summarized.
 
     Returns
     -------
     stats : `dict`
-        Keys from `DarkHoursMap.stats_in_region` plus
-        `DarkHoursMap.weighted_stats`.
+        ``max_hours``, ``mean_hours``, ``median_hours``: accessible hours over
+        the region's pixels, unweighted; ``weighted_mean_hours``: the same,
+        weighted by probability within the region.
+        ``probability_accessible``: fraction of the region's probability on
+        pixels with any accessible dark time -- of the region's own, so a
+        fully accessible region reads 1 rather than the credible level.
+        ``area_accessible`` (alias ``fraction_accessible``): fraction of the
+        region's area with any accessible dark time, ``area_accessible_deg2``
+        the same in deg^2. ``region_area_deg2``, ``region_probability`` (the
+        share of the whole map's probability the region holds, just above
+        ``credible_level``) and ``credible_level`` describe the region itself.
     """
-    mask = localization.prob_map > 0
-    if mask.size != dark_hours.hours.size:
-        mask = hp.ud_grade(mask.astype(float), dark_hours.nside, order_in="RING", order_out="RING") > 0
-    stats = dark_hours.stats_in_region(mask)
-    stats.update(dark_hours.weighted_stats(localization.prob_map))
+    prob = np.asarray(localization.prob_map, dtype=float)
+    hours = np.asarray(dark_hours.hours, dtype=float)
+    nside = max(hp.npix2nside(prob.size), dark_hours.nside)
+    if prob.size != hp.nside2npix(nside):
+        # power=-2 conserves the summed probability across the resolution
+        # change.
+        prob = hp.ud_grade(prob, nside, order_in="RING", order_out="RING", power=-2)
+    if hours.size != hp.nside2npix(nside):
+        # Upgrading replicates each pixel's hours into its children.
+        hours = hp.ud_grade(hours, nside, order_in="RING", order_out="RING")
+
+    region = localization_region(localization, nside)
+    pixel_area = hp.nside2pixarea(nside, degrees=True)
+    stats: dict[str, float] = {
+        "credible_level": float(localization.credible_level),
+        "region_area_deg2": float(np.count_nonzero(region) * pixel_area),
+        "region_probability": float(prob[region].sum()),
+    }
+    if not region.any() or stats["region_probability"] <= 0:
+        logger.warning("Credible region is empty; no accessible dark-time statistics")
+        nan = float("nan")
+        stats.update(
+            max_hours=nan,
+            mean_hours=nan,
+            median_hours=nan,
+            weighted_mean_hours=nan,
+            probability_accessible=0.0,
+            area_accessible=0.0,
+            fraction_accessible=0.0,
+            area_accessible_deg2=0.0,
+        )
+        return stats
+
+    values = hours[region]
+    weights = prob[region] / stats["region_probability"]
+    accessible = values > 0
+    area_fraction = float(np.count_nonzero(accessible) / values.size)
+    stats.update(
+        max_hours=float(values.max()),
+        mean_hours=float(values.mean()),
+        median_hours=float(np.median(values)),
+        weighted_mean_hours=float(np.sum(weights * values)),
+        # Clipped because the weighted sum can land a rounding error above 1.
+        probability_accessible=float(min(np.sum(weights[accessible]), 1.0)),
+        area_accessible=area_fraction,
+        fraction_accessible=area_fraction,
+        area_accessible_deg2=float(np.count_nonzero(accessible) * pixel_area),
+    )
     return stats
