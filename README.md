@@ -34,11 +34,15 @@ the dark-hours plot):
 - **Weather and site links** for Cerro Tololo.
 - **Localization contour over accessible dark hours**: a full-sky map coloured
   by hours per pixel with airmass < 2 while the Sun is below -12 deg, with the
-  localization drawn on top -- both the plain fraction of the region that is
-  ever accessible and the *probability-weighted* mean accessible time are
-  reported, because they can disagree: a region can be half accessible by area
-  while almost none of its probability ever rises (a real, if unlucky,
-  example is in `tests/data/samples` -- see below).
+  localization drawn on top.
+- **What DECam can reach inside the 90% localization tonight**, separately
+  as **probability** and as **area** (% and deg^2): the share of the region
+  that reaches airmass < 2 at any point during the night, plus the max, mean
+  and probability-weighted mean accessible hours there. Both are reported
+  because neither implies the other: a region can be half accessible by area
+  while almost none of its probability ever rises, or the reverse (a real, if
+  unlucky, example is in `tests/data/samples` -- see below). See
+  [Coverage of the credible region](#coverage-of-the-credible-region).
 - **A chirp-mass line**, best-effort from GraceDB: the one number in this
   message the notice schema has no field for.
 - **A high-priority triage badge**, when `PriorityConfig`'s thresholds on FAR,
@@ -332,15 +336,41 @@ hand-rolled substitute. Notable checks:
   message.
 - `superevent_id` prefixes `S`/`M`/`T` are asserted to map to `is_real`
   correctly, since that is what routes a notice to the test channel.
+- Accessible probability and area within the credible region agree exactly
+  when the weight inside it is uniform, and probability exceeds area when only
+  the peak is accessible. Probability in the tails outside the region never
+  counts, even on a map with probability in every pixel.
 
 `tests/data/samples/MS181101ab-preliminary.json` (fetched with
 `scripts/fetch_samples.py`, not committed) is worth a look once downloaded:
 its localization -- a real, if antiquated, two-detector BAYESTAR
-skymap -- sits almost entirely in the part of the sky that never clears
-CTIO's airmass limit that night, so `replay --dry-run` on it prints a
-`mean` accessible time and a `probability-weighted mean` that disagree by
-four orders of magnitude. That gap is exactly the reason both numbers are
-reported rather than one.
+skymap -- has its 90% region (about 31 deg^2) entirely in the part of the sky
+that never clears CTIO's airmass limit that night, so `replay --dry-run` on
+it reports 0% of the region's probability and 0% of its area as accessible.
+Its faint tails, though, cover most of the sky, much of which *is*
+accessible: counting every pixel with any probability, as an earlier version
+did, turned that into a large accessible "region" and a mean accessible time
+four orders of magnitude above the probability-weighted one. That is why
+every number in the post is measured over the credible region only.
+
+### Coverage of the credible region
+
+The region is `astro.skymap.localization_region` -- the same 90% region the
+plot's contour draws -- measured at the localization's own resolution
+(nside 512), with the coarser dark-hours map's pixels replicated into it, so
+the area is not quantized by the dark-hours map's ~0.84 deg^2 pixels. Two
+separate fractions of it are reported:
+
+- **probability** -- the region's probability on pixels with any accessible
+  dark time, divided by the probability the region holds. A fully accessible
+  region reads 100%, not 90%; the post also states what the region actually
+  holds (just above 90%, since it is built from whole pixels).
+- **area** -- the same pixels counted with uniform weight, so exactly the
+  fraction of the region's *sky*, quoted in deg^2 as well.
+
+They agree exactly when the probability is uniform across the region, and
+disagree otherwise: an accessible peak buys more probability than area, and
+an accessible fringe more area than probability.
 
 ## Known limitations
 

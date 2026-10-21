@@ -38,6 +38,8 @@ def test_full_message_contains_the_key_facts(notice, config):
     assert "Localization" in text
     assert "DECam pointings" in text
     assert "Night of" in text
+    assert "Within the 90% localization" in text
+    assert "probability *" in text and "|  area " in text
     assert "no observing-strategy recommendation" in text
     assert "GraceDB" in text
 
